@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "Pontual",
+    "slug": "pontual-docente",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-sqlite",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "O aplicativo Pontual precisa acessar suas fotos para definir sua foto de perfil e a logo das instituições de ensino."
+        }
+      ]
+    ]
+  }
+}
