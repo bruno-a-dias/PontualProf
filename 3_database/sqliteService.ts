@@ -1,9 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { ClassScheduleItem, Institution, PontoLogEntry, PontoRule, UserProfile } from '../1_types/types';
 
 const LOCAL_JSON_KEY = '@pontual_local_database_v1';
+
+function getDocumentDirectory(): string {
+  const documentDirectory = FileSystem.documentDirectory;
+  if (!documentDirectory) {
+    throw new Error('Diretório de documentos indisponível.');
+  }
+  return documentDirectory;
+}
 
 export interface LocalDatabaseSnapshot {
   activeSemester: string;
@@ -36,7 +44,7 @@ export async function loadLocalDatabase(): Promise<LocalDatabaseSnapshot | null>
  * Exporta os dados locais para um arquivo .json físico e abre o menu de compartilhamento do sistema.
  */
 export async function exportDatabaseAsJsonFile(snapshot: LocalDatabaseSnapshot): Promise<string> {
-  const fileUri = `${FileSystem.documentDirectory}pontual_backup_${snapshot.activeSemester.replace('/', '-')}.json`;
+  const fileUri = `${getDocumentDirectory()}pontual_backup_${snapshot.activeSemester.replace('/', '-')}.json`;
   await FileSystem.writeAsStringAsync(fileUri, JSON.stringify(snapshot, null, 2), {
     encoding: FileSystem.EncodingType.UTF8,
   });
@@ -84,7 +92,7 @@ export async function exportDatabaseAsSqliteDump(snapshot: LocalDatabaseSnapshot
 
   lines.push('COMMIT;');
 
-  const fileUri = `${FileSystem.documentDirectory}pontual_sqlite_local.sql`;
+  const fileUri = `${getDocumentDirectory()}pontual_sqlite_local.sql`;
   await FileSystem.writeAsStringAsync(fileUri, lines.join('\n'), {
     encoding: FileSystem.EncodingType.UTF8,
   });

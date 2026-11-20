@@ -24,7 +24,6 @@ function MainNavigationShell() {
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.colors.background }]}>
       <StatusBar
         barStyle={themeMode === 'light' ? 'dark-content' : 'light-content'}
-        backgroundColor={theme.colors.card}
       />
 
       {/* Faixa Superior Rubro & Ouro */}
