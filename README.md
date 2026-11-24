@@ -1,6 +1,19 @@
 # Pontual
 
-Aplicação web responsiva para grade docente e ponto eletrônico, servida por Django e instalada como PWA.
+Aplicação web responsiva para grade docente, ponto eletrônico e diário de classe, servida por Django e instalada como PWA.
+
+## Recursos
+
+- **Diário de classe**: registre número da aula, data, conteúdo ministrado e observações por disciplina. A numeração é automática (aula dupla vira "3–4"; faltas e feriados não consomem número). "Gerar datas do semestre" cria as linhas previstas para você só preencher depois. Exporte em CSV (abre no Excel em português), copie a tabela para colar em planilhas/sistemas, copie o conteúdo de uma linha, ou imprima/salve em PDF.
+- **Ponto**: botão que abre o portal da instituição, confirmação "você concluiu o registro?", alerta de ponto esquecido, histórico exportável em CSV.
+- **Lembretes**: notificações antes de cada janela de ponto (ver limites abaixo) e exportação da grade para a agenda do celular (`.ics`, com alarmes).
+- **Grade**: visão em lista ou semanal, carga horária semanal, aviso de conflito de horário e importação por planilha CSV.
+- **Segurança dos dados**: lembrete de backup, pedido de armazenamento persistente ao navegador e backup JSON que inclui o diário.
+- **Aparência**: tema claro, escuro ou rubro e ouro, escolhido em Ajustes.
+
+### Limites dos lembretes
+
+Notificações locais dependem do navegador: funcionam com o app aberto ou instalado; em alguns Androids (Chrome) chegam com o app fechado; no iPhone exigem instalar o app na tela inicial. Para alarmes garantidos use o arquivo `.ics`.
 
 ## Dados e privacidade
 
@@ -28,4 +41,7 @@ Em **Dados**, importe o arquivo JSON exportado pelo aplicativo antigo. A importa
 ```powershell
 python manage.py check
 python manage.py test
+node --test tests_js/lib.test.js
 ```
+
+Os testes JavaScript cobrem as funções puras de `static/core/lib.js` (numeração do diário, CSV/TSV, calendário `.ics`, conflitos, lembretes e importação de planilha).

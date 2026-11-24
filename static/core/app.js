@@ -9,6 +9,7 @@
   const DAY_NAMES = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
   const DAY_SHORT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
   const SHIFT_NAMES = ["Matutino", "Especial", "Vespertino", "Noturno"];
+  const L = window.PontualLib;
 
   const main = document.getElementById("main-content");
   const semesterSelect = document.getElementById("active-semester");
@@ -22,6 +23,13 @@
   let editingInstitutionId = "";
   let pendingInstitutionLogo = "";
   let toastTimer;
+  let scheduleView = "list";
+  let diaryTurma = "";
+  let diaryFilter = "all";
+  let storagePersisted = null;
+  let conflictMap = {};
+
+  const defaultSettings = () => ({ remindersEnabled: false, reminderLead: 5, backupReminderDays: 30, lastBackupAt: "" });
 
   const emptySnapshot = () => ({
     activeSemester: "2027/1",
@@ -31,6 +39,8 @@
     pontoRules: [],
     classes: [],
     pontoLogs: [],
+    diary: [],
+    settings: defaultSettings(),
   });
 
   function escapeHTML(value) {
@@ -104,12 +114,18 @@
       validString(item.timestamp) && validString(item.institutionName) &&
       validString(item.shift) && validString(item.phase) &&
       validString(item.subject) && validString(item.campus) && validString(item.url);
+    const validDiary = (item) =>
+      item && typeof item === "object" && validString(item.id) && validString(item.semester) &&
+      validString(item.institutionId) && validString(item.subject) && Boolean(L.parseISODate(item.date)) &&
+      L.DIARY_STATUSES.some((status) => status.value === item.status) &&
+      validString(item.content ?? "") && validString(item.notes ?? "");
     if (
       !value.semesters.every(validString) ||
       !value.institutions.every(validInstitution) ||
       !value.pontoRules.every(validRule) ||
       !value.classes.every(validClass) ||
-      !value.pontoLogs.every(validLog)
+      !value.pontoLogs.every(validLog) ||
+      !(value.diary ?? []).every(validDiary)
     ) {
       throw new Error("O backup está incompleto ou contém registros inválidos.");
     }
@@ -125,6 +141,19 @@
       pontoRules: value.pontoRules,
       classes: value.classes,
       pontoLogs: value.pontoLogs,
+      diary: L.renumberAll((value.diary ?? []).map((item) => ({
+        classId: "", startTime: "", periods: 1, ...item,
+        content: item.content ?? "", notes: item.notes ?? "", periods: Math.min(8, Math.max(1, Number(item.periods) || 1)),
+      }))),
+      settings: {
+        ...defaultSettings(),
+        ...(value.settings && typeof value.settings === "object" ? {
+          remindersEnabled: value.settings.remindersEnabled === true,
+          reminderLead: [5, 10, 15].includes(Number(value.settings.reminderLead)) ? Number(value.settings.reminderLead) : 5,
+          backupReminderDays: Number(value.settings.backupReminderDays) > 0 ? Number(value.settings.backupReminderDays) : 30,
+          lastBackupAt: typeof value.settings.lastBackupAt === "string" ? value.settings.lastBackupAt : "",
+        } : {}),
+      },
     };
   }
 
@@ -181,6 +210,7 @@
     mutator(nextState);
     state = nextState;
     render();
+    scheduleReminders();
     try {
       await persistState();
       if (successMessage) showToast(successMessage);
@@ -292,7 +322,8 @@
     return `<div class="empty-state"><div><strong>${escapeHTML(title)}</strong><p>${escapeHTML(description)}</p>${action ? `<div style="margin-top:13px">${action}</div>` : ""}</div></div>`;
   }
 
-  function renderClassCard(item, actions = true) {
+  function renderClassCard(item, actions = true, diaryShortcut = false) {
+    const clash = conflictNames(item);
     const room = item.roomType === "Laboratório" ? "Laboratório" : "Sala";
     return `
       <article class="class-card">
@@ -303,7 +334,9 @@
           <div class="class-tags">
             <span class="tag">${escapeHTML(item.shift)}</span>
             <span class="tag is-accent">${escapeHTML(room)} ${escapeHTML(item.roomNumber || "—")}</span>
+            ${clash.length ? `<span class="tag is-danger" title="${escapeHTML(clash.join(", "))}">Conflito de horário</span>` : ""}
           </div>
+          ${diaryShortcut ? `<button type="button" class="button button-quiet button-small class-diary" data-action="add-diary" data-class-id="${escapeHTML(item.id)}" data-date="${L.toISODate(L.latestDateForWeekday(item.dayOfWeek))}">✎ Diário</button>` : ""}
         </div>
         ${actions ? `<div class="class-actions">
           <button type="button" class="icon-button" data-action="edit-class" data-id="${escapeHTML(item.id)}" aria-label="Editar ${escapeHTML(item.subject)}">✎</button>
@@ -326,7 +359,7 @@
     const todayLabel = now.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
     const pointLink = activeClass ? resolvePontoUrl(activeClass) : null;
     const todayClasses = classes.length
-      ? `<div class="class-list">${classes.map((item) => renderClassCard(item, false)).join("")}</div>`
+      ? `<div class="class-list">${classes.map((item) => renderClassCard(item, false, true)).join("")}</div>`
       : renderEmpty("Sem aulas neste dia", "Adicione uma aula à grade ou importe seu backup local.", `<button type="button" class="button button-secondary" data-action="add-class">Adicionar aula</button>`);
 
     return `
@@ -335,6 +368,7 @@
           <div><span class="eyebrow">VISÃO DO DIA</span><h1>Olá${profile.name.trim() ? `, ${escapeHTML(profile.name.trim().split(/\s+/)[0].replace(/\.+$/, ""))}` : ""}.</h1><p>${escapeHTML(todayLabel)} · semestre ${escapeHTML(state.activeSemester)}</p></div>
         </div>
 
+        ${renderHomeAlerts()}
         <div class="home-grid">
         <div class="page-stack home-side">
         <section class="card profile-card" aria-label="Perfil docente">
@@ -349,7 +383,7 @@
             <span class="live-pill">HORÁRIO LOCAL</span>
           </div>
           <div class="status-panel ${evaluation?.open ? "is-open" : ""}">
-            <div class="status-copy"><strong>${escapeHTML(evaluation?.label || "Nenhuma aula para este dia")}</strong><small>${activeClass ? `${escapeHTML(activeClass.startTime)}–${escapeHTML(activeClass.endTime)} · janela de ponto ±15 min` : "Cadastre uma aula ou importe os seus dados."}</small></div>
+            <div class="status-copy"><strong>${escapeHTML(evaluation?.label || "Nenhuma aula para este dia")}</strong><small>${activeClass ? `${escapeHTML(activeClass.startTime)}–${escapeHTML(activeClass.endTime)} · janela de ponto ±15 min${selectedDay === now.getDay() ? ` · ${escapeHTML(L.countdownText(activeClass, now))}` : ""}` : "Cadastre uma aula ou importe os seus dados."}</small></div>
             <span class="status-icon" aria-hidden="true">${evaluation?.icon || "＋"}</span>
           </div>
         </section>
@@ -395,7 +429,7 @@
     return `
       <div class="page-stack">
         <div class="page-heading"><div><span class="eyebrow">ORGANIZAÇÃO</span><h1>Sua grade.</h1><p>Horários e salas do semestre ${escapeHTML(state.activeSemester)}.</p></div><button type="button" class="button button-primary" data-action="add-class">＋ Aula</button></div>
-        ${groups ? `<div class="card-grid">${groups}</div>` : renderEmpty("Sua grade está vazia", "Importe o backup do app anterior ou cadastre a primeira aula.", `<button type="button" class="button button-primary" data-action="add-class">Cadastrar aula</button>`)}
+        ${renderScheduleSummary()}${groups ? (scheduleView === "week" ? renderWeekView() : `<div class="card-grid">${groups}</div>`) : renderEmpty("Sua grade está vazia", "Importe o backup do app anterior ou cadastre a primeira aula.", `<button type="button" class="button button-primary" data-action="add-class">Cadastrar aula</button>`)}
       </div>`;
   }
 
@@ -455,6 +489,8 @@
           </form>
         </section>
 
+        ${renderAppearance()}
+        ${renderReminderSettings()}
         <section class="card settings-section">
           <div><span class="eyebrow">PERÍODO LETIVO</span><h2>Semestres</h2><p class="card-description">O novo período pode iniciar com uma cópia da grade ativa.</p></div>
           <div class="class-tags">${state.semesters.map((semester) => `<button type="button" class="tag ${semester === state.activeSemester ? "is-accent" : ""}" data-action="activate-semester" data-semester="${escapeHTML(semester)}">${escapeHTML(semester)}${semester === state.activeSemester ? " · ativo" : ""}</button>`).join("")}</div>
@@ -469,7 +505,7 @@
 
   function renderData() {
     const logs = state.pontoLogs.map((entry) => `
-      <div class="data-row log-row"><div class="data-row-copy"><strong>${escapeHTML(entry.institutionName)} · ${escapeHTML(entry.phase)}</strong><small>${escapeHTML(entry.subject)} · ${escapeHTML(entry.campus)}</small></div><time>${escapeHTML(entry.timestamp)}</time></div>`).join("");
+      <div class="data-row log-row"><div class="data-row-copy"><strong>${escapeHTML(entry.institutionName)} · ${escapeHTML(entry.phase)}</strong><small>${escapeHTML(entry.subject)} · ${escapeHTML(entry.campus)}${confirmLabel(entry)}</small></div><time>${escapeHTML(entry.timestamp)}</time></div>`).join("");
     return `
       <div class="page-stack">
         <div class="page-heading"><div><span class="eyebrow">ARMAZENAMENTO LOCAL</span><h1>Seus dados.</h1><p>Privados neste navegador. Não são enviados ao Django.</p></div></div>
@@ -481,10 +517,13 @@
             <div class="stat"><strong>${state.classes.length}</strong><small>Aulas</small></div>
             <div class="stat"><strong>${state.institutions.length}</strong><small>Instituições</small></div>
             <div class="stat"><strong>${state.pontoLogs.length}</strong><small>Batidas</small></div>
+            <div class="stat"><strong>${state.diary.length}</strong><small>Diário</small></div>
           </div>
           <p class="card-description">Cada navegador mantém seu próprio banco. Para levar seus dados a outro aparelho, exporte o JSON aqui e importe-o no destino.</p>
         </section>
 
+        ${renderBackupStatus()}
+        ${renderSheetImport()}
         <section class="card settings-section">
           <div><span class="eyebrow">BACKUP PORTÁTIL</span><h2>Exportar ou importar</h2><p class="card-description">O arquivo é lido e gravado localmente; não há envio ao servidor.</p></div>
           <button type="button" class="button button-primary button-wide" data-action="export-backup">⇩ Exportar backup JSON</button>
@@ -493,22 +532,799 @@
         </section>
 
         <section class="card settings-section">
-          <div><span class="eyebrow">HISTÓRICO LOCAL</span><h2>Batidas de ponto</h2></div>
+          <div class="card-heading"><div><span class="eyebrow">HISTÓRICO LOCAL</span><h2>Batidas de ponto</h2></div><button type="button" class="button button-quiet button-small" data-action="export-logs">Exportar CSV</button></div>
           ${logs ? `<div class="item-list">${logs}</div>` : renderEmpty("Nenhuma batida registrada", "Ao abrir o portal pelo botão de ponto, o evento será anotado aqui.")}
         </section>
         </div>
       </div>`;
   }
 
+  function renderAppearance() {
+    const current = document.documentElement.dataset.theme || "rubro";
+    const options = [
+      ["light", "☼", "Claro", "Fundo branco, ótimo ao ar livre"],
+      ["dark", "◐", "Escuro", "Cinza escuro com destaque azul"],
+      ["rubro", "●", "Rubro e ouro", "Preto com vermelho e dourado"],
+    ];
+    return `
+      <section class="card settings-section">
+        <div><span class="eyebrow">APARÊNCIA</span><h2>Tema visual</h2><p class="card-description">A escolha fica salva neste aparelho.</p></div>
+        <div class="theme-options" role="group" aria-label="Tema visual">
+          ${options.map(([value, icon, name, text]) => `
+            <button type="button" class="theme-option" data-theme-choice="${value}" aria-pressed="${current === value}">
+              <span class="theme-icon theme-icon-${value}" aria-hidden="true">${icon}</span>
+              <span><strong>${name}</strong><small>${text}</small></span>
+            </button>`).join("")}
+        </div>
+      </section>`;
+  }
+
+  // ====================================================================================
+  // Diário de classe, lembretes, ponto confirmado, backup, semana, planilhas
+  // ====================================================================================
+  const diaryDialog = document.getElementById("diary-dialog");
+  const diaryForm = document.getElementById("diary-form");
+  const planDialog = document.getElementById("plan-dialog");
+  const planForm = document.getElementById("plan-form");
+  const WEEK_SCALE = 1.1; // px per minute in the weekly view
+  const SIX_HOURS = 6 * 60 * 60 * 1000;
+
+  const todayISO = () => L.toISODate(new Date());
+
+  function downloadText(filename, text, mime = "text/csv;charset=utf-8") {
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.cssText = "position:fixed;opacity:0";
+      document.body.append(area);
+      area.select();
+      let copied = false;
+      try { copied = document.execCommand("copy"); } catch { copied = false; }
+      area.remove();
+      return copied;
+    }
+  }
+
+  const slug = (value) => String(value || "arquivo").normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "arquivo";
+
+  // ------------------------------------------------------------------ Diário
+
+  /** One "turma" = the same subject at the same institution in the active semester. */
+  function turmaList() {
+    const map = new Map();
+    const add = (source, withClass) => {
+      const key = L.diaryKey(source);
+      if (!map.has(key)) map.set(key, { key, subject: source.subject, institutionId: source.institutionId, classes: [] });
+      if (withClass) map.get(key).classes.push(source);
+    };
+    state.classes.filter((item) => item.semester === state.activeSemester).forEach((item) => add(item, true));
+    state.diary.filter((entry) => entry.semester === state.activeSemester).forEach((entry) => add(entry, false));
+    return [...map.values()].sort((left, right) => left.subject.localeCompare(right.subject, "pt-BR"));
+  }
+
+  const countsForNumber = (entry) => L.DIARY_STATUSES.find((item) => item.value === entry.status)?.counts;
+
+  /** An entry still needs the teacher's attention when its date has come and the text is missing. */
+  function isPending(entry) {
+    if (entry.date > todayISO()) return false;
+    return entry.status === "Prevista" || (countsForNumber(entry) && !entry.content.trim());
+  }
+
+  function findDiaryEntry(source, date) {
+    return state.diary.find((entry) =>
+      L.diaryKey(entry) === L.diaryKey(source) && entry.date === date && (entry.startTime || "") === (source.startTime || ""));
+  }
+
+  function todayDiaryGaps(now = new Date()) {
+    const today = L.toISODate(now);
+    const current = now.getHours() * 60 + now.getMinutes();
+    return sortedClasses()
+      .filter((item) => Number(item.dayOfWeek) === now.getDay() && current >= L.timeToMinutes(item.startTime))
+      .filter((item) => {
+        const entry = findDiaryEntry(item, today);
+        return !entry || (entry.status === "Prevista" && !entry.content.trim());
+      });
+  }
+
+  function diaryEntriesFor(key) {
+    return L.renumber(state.diary.filter((entry) => L.diaryKey(entry) === key));
+  }
+
+  function renderDiaryRow(entry) {
+    const skipped = !countsForNumber(entry);
+    const pending = isPending(entry);
+    const weekday = L.DAY_SHORT[L.parseISODate(entry.date)?.getDay() ?? 0];
+    const tone = skipped ? "" : entry.status === "Reposição" ? "is-accent" : pending ? "is-danger" : "";
+    const empty = (text) => `<span class="muted">${text}</span>`;
+    return `
+      <tr class="${pending ? "is-pending" : ""} ${skipped ? "is-skipped" : ""}">
+        <td data-label="Aula nº" class="col-number">${escapeHTML(L.lessonLabel(entry))}</td>
+        <td data-label="Data" class="col-date">${escapeHTML(L.formatBR(entry.date))} <small>${escapeHTML(weekday)}</small></td>
+        <td data-label="Conteúdo ministrado" class="col-content">${entry.content.trim() ? escapeHTML(entry.content) : empty(skipped ? "—" : "Preencher…")}</td>
+        <td data-label="Observações" class="col-notes ${entry.notes.trim() ? "" : "is-empty"}">${entry.notes.trim() ? escapeHTML(entry.notes) : empty("—")}</td>
+        <td data-label="Situação" class="col-status"><span class="tag ${tone}">${escapeHTML(entry.status)}</span></td>
+        <td class="col-actions no-print"><div class="row-actions">
+          <button type="button" class="icon-button" data-action="edit-diary" data-id="${escapeHTML(entry.id)}" aria-label="Editar aula de ${escapeHTML(L.formatBR(entry.date))}">✎</button>
+          <button type="button" class="icon-button" data-action="copy-field" data-field="content" data-id="${escapeHTML(entry.id)}" aria-label="Copiar conteúdo de ${escapeHTML(L.formatBR(entry.date))}" title="Copiar conteúdo">⧉</button>
+        </div></td>
+      </tr>`;
+  }
+
+  function renderDiary() {
+    const heading = `<div class="page-heading"><div><span class="eyebrow">LIVRO DIÁRIO</span><h1>Diário de classe.</h1><p>Registre aqui e depois copie ou exporte para o sistema da instituição.</p></div></div>`;
+    const turmas = turmaList();
+    if (!turmas.length) {
+      return `<div class="page-stack">${heading}${renderEmpty("Nenhuma disciplina neste semestre", "Cadastre suas aulas na grade (ou importe uma planilha em Dados) para começar o diário.", `<button type="button" class="button button-primary" data-action="add-class">Cadastrar aula</button>`)}</div>`;
+    }
+    if (!turmas.some((turma) => turma.key === diaryTurma)) diaryTurma = turmas[0].key;
+    const turma = turmas.find((item) => item.key === diaryTurma);
+    const entries = diaryEntriesFor(diaryTurma);
+    const pendingCount = entries.filter(isPending).length;
+    const shown = diaryFilter === "pending" ? entries.filter(isPending) : entries;
+    const gaps = todayDiaryGaps();
+    const profile = state.userProfile;
+    const gapsCard = gaps.length ? `
+      <section class="card alert-card is-primary no-print">
+        <span class="eyebrow">HOJE</span><h2>Aulas de hoje sem registro</h2>
+        <div class="item-list">${gaps.map((item) => `
+          <div class="data-row"><div class="data-row-copy"><strong>${escapeHTML(item.subject)}</strong><small>${escapeHTML(item.startTime)}–${escapeHTML(item.endTime)} · ${escapeHTML(institutionName(item.institutionId))}</small></div>
+          <button type="button" class="button button-primary button-small" data-action="add-diary" data-class-id="${escapeHTML(item.id)}" data-date="${todayISO()}">Registrar</button></div>`).join("")}</div>
+      </section>` : "";
+    const table = shown.length ? `
+      <div class="diary-table-wrap"><table class="diary-table">
+        <thead><tr><th>Aula nº</th><th>Data</th><th>Conteúdo ministrado</th><th>Observações</th><th>Situação</th><th class="no-print"><span class="sr-only">Ações</span></th></tr></thead>
+        <tbody>${shown.map(renderDiaryRow).join("")}</tbody>
+      </table></div>`
+      : renderEmpty(
+        diaryFilter === "pending" ? "Nada pendente" : "Nenhuma aula registrada ainda",
+        diaryFilter === "pending" ? "Todas as aulas até hoje já têm conteúdo." : "Registre a aula de hoje ou gere as datas previstas do semestre para ir preenchendo.",
+        diaryFilter === "pending" ? "" : `<button type="button" class="button button-primary" data-action="add-diary">Registrar aula</button>`,
+      );
+    return `
+      <div class="page-stack page-diary">
+        ${heading}
+        ${gapsCard}
+        <section class="card diary-card">
+          <div class="print-only print-header">
+            <h2>Diário de classe — ${escapeHTML(turma.subject)}</h2>
+            <p>${escapeHTML(institutionName(turma.institutionId))} · Semestre ${escapeHTML(state.activeSemester)}${profile.name ? ` · Prof. ${escapeHTML(profile.name)}` : ""}</p>
+          </div>
+          <div class="diary-toolbar no-print">
+            <label>Disciplina / turma
+              <select data-diary-select aria-label="Disciplina">${turmas.map((item) => `<option value="${escapeHTML(item.key)}" ${item.key === diaryTurma ? "selected" : ""}>${escapeHTML(item.subject)} · ${escapeHTML(institutionName(item.institutionId))}</option>`).join("")}</select>
+            </label>
+            <div class="segmented" role="group" aria-label="Filtro">
+              <button type="button" data-action="set-diary-filter" data-filter="all" aria-pressed="${diaryFilter === "all"}">Todas (${entries.length})</button>
+              <button type="button" data-action="set-diary-filter" data-filter="pending" aria-pressed="${diaryFilter === "pending"}">Pendentes (${pendingCount})</button>
+            </div>
+          </div>
+          <div class="diary-actions no-print">
+            <button type="button" class="button button-primary button-small" data-action="add-diary">＋ Registrar aula</button>
+            <button type="button" class="button button-secondary button-small" data-action="plan-diary">Gerar datas do semestre</button>
+            <button type="button" class="button button-quiet button-small" data-action="copy-diary">Copiar tabela</button>
+            <button type="button" class="button button-quiet button-small" data-action="export-diary">Baixar CSV</button>
+            <button type="button" class="button button-quiet button-small" data-action="print-diary">Imprimir / PDF</button>
+            <button type="button" class="button button-quiet button-small" data-action="export-diary-all">CSV de todas as disciplinas</button>
+          </div>
+          ${table}
+          <p class="card-description no-print">O número da aula é calculado pela ordem das datas (aula dupla vira “3–4”; faltas e feriados não consomem número). <strong>Copiar tabela</strong> cola direto no Excel/Planilhas; o botão ⧉ de cada linha copia só o conteúdo, para colar no campo do sistema da instituição.</p>
+        </section>
+      </div>`;
+  }
+
+  function diaryStatusOptions(selected) {
+    return L.DIARY_STATUSES.map((item) => `<option ${item.value === selected ? "selected" : ""}>${escapeHTML(item.value)}</option>`).join("");
+  }
+
+  function periodsFor(turma, date) {
+    const weekday = L.parseISODate(date)?.getDay();
+    const item = turma?.classes.find((entry) => Number(entry.dayOfWeek) === weekday) || turma?.classes[0];
+    return item ? L.suggestedPeriods(item) : 1;
+  }
+
+  function autofillDiaryPeriods() {
+    const turma = turmaList().find((item) => item.key === diaryForm.elements.namedItem("turma").value);
+    diaryForm.elements.namedItem("periods").value = periodsFor(turma, diaryForm.elements.namedItem("date").value);
+  }
+
+  let diaryEditingId = "";
+
+  function openDiaryDialog({ id = "", classId = "", date = "" } = {}) {
+    const turmas = turmaList();
+    if (!turmas.length) {
+      showToast("Cadastre uma aula na grade antes de usar o diário.");
+      return;
+    }
+    const item = state.classes.find((entry) => entry.id === classId);
+    const existing = state.diary.find((entry) => entry.id === id) || (item && date ? findDiaryEntry(item, date) : null);
+    const key = existing ? L.diaryKey(existing) : item ? L.diaryKey(item) : diaryTurma;
+    const turma = turmas.find((entry) => entry.key === key) || turmas[0];
+    diaryEditingId = existing?.id || "";
+    diaryForm.reset();
+    const select = diaryForm.elements.namedItem("turma");
+    select.innerHTML = turmas.map((entry) => `<option value="${escapeHTML(entry.key)}">${escapeHTML(entry.subject)} · ${escapeHTML(institutionName(entry.institutionId))}</option>`).join("");
+    select.value = turma.key;
+    diaryForm.elements.namedItem("status").innerHTML = diaryStatusOptions(existing?.status || "Realizada");
+    const chosenDate = existing?.date || date || todayISO();
+    diaryForm.elements.namedItem("date").value = chosenDate;
+    diaryForm.elements.namedItem("periods").value = existing?.periods || periodsFor(turma, chosenDate);
+    diaryForm.elements.namedItem("content").value = existing?.content || "";
+    diaryForm.elements.namedItem("notes").value = existing?.notes || "";
+    document.getElementById("diary-dialog-title").textContent = existing ? "Editar aula" : "Registrar aula";
+    document.getElementById("delete-diary").hidden = !existing;
+    diaryDialog.showModal();
+    diaryForm.elements.namedItem("content").focus();
+  }
+
+  function saveDiary() {
+    if (!diaryForm.reportValidity()) return;
+    const data = new FormData(diaryForm);
+    const turma = turmaList().find((entry) => entry.key === String(data.get("turma")));
+    const date = String(data.get("date") || "");
+    const parsed = L.parseISODate(date);
+    if (!turma || !parsed) {
+      showToast("Escolha a disciplina e uma data válida.");
+      return;
+    }
+    const item = turma.classes.find((entry) => Number(entry.dayOfWeek) === parsed.getDay());
+    const id = diaryEditingId || makeId("diary");
+    const entry = {
+      id,
+      classId: item?.id || "",
+      semester: state.activeSemester,
+      institutionId: turma.institutionId,
+      subject: turma.subject,
+      date,
+      startTime: item?.startTime || "",
+      periods: Math.min(8, Math.max(1, Number(data.get("periods")) || 1)),
+      status: String(data.get("status")),
+      content: String(data.get("content") || "").trim(),
+      notes: String(data.get("notes") || "").trim(),
+    };
+    if (state.diary.some((other) => other.id !== id && L.diaryKey(other) === turma.key && other.date === date && (other.startTime || "") === entry.startTime)) {
+      showToast("Já existe um registro desta aula nesta data. Edite o existente.");
+      return;
+    }
+    changeState((next) => {
+      const index = next.diary.findIndex((other) => other.id === id);
+      if (index >= 0) next.diary[index] = entry;
+      else next.diary.push(entry);
+      next.diary = L.renumberAll(next.diary);
+    }, "Registro salvo no diário deste dispositivo.");
+    diaryTurma = turma.key;
+    diaryDialog.close();
+  }
+
+  function deleteDiary() {
+    if (!diaryEditingId || !window.confirm("Excluir este registro do diário?")) return;
+    const id = diaryEditingId;
+    changeState((next) => { next.diary = L.renumberAll(next.diary.filter((entry) => entry.id !== id)); }, "Registro removido.");
+    diaryDialog.close();
+  }
+
+  function openPlanDialog() {
+    const turma = turmaList().find((entry) => entry.key === diaryTurma);
+    if (!turma?.classes.length) {
+      showToast("Esta disciplina não tem horário na grade. Cadastre a aula primeiro.");
+      return;
+    }
+    const start = new Date();
+    planForm.elements.namedItem("start").value = L.toISODate(start);
+    planForm.elements.namedItem("end").value = L.toISODate(L.addDays(start, 17 * 7));
+    document.getElementById("plan-summary").textContent =
+      `${turma.subject}: ${turma.classes.map((item) => `${L.DAY_SHORT[item.dayOfWeek]} ${item.startTime}`).join(", ")}`;
+    planDialog.showModal();
+  }
+
+  function savePlan() {
+    if (!planForm.reportValidity()) return;
+    const data = new FormData(planForm);
+    const start = String(data.get("start"));
+    const end = String(data.get("end"));
+    const turma = turmaList().find((entry) => entry.key === diaryTurma);
+    if (!turma) return;
+    const created = [];
+    turma.classes.forEach((item) => {
+      L.datesForWeekday(start, end, item.dayOfWeek).forEach((date) => {
+        if (findDiaryEntry(item, date)) return;
+        created.push({
+          id: makeId("diary"), classId: item.id, semester: state.activeSemester, institutionId: item.institutionId,
+          subject: item.subject, date, startTime: item.startTime, periods: L.suggestedPeriods(item),
+          status: "Prevista", content: "", notes: "",
+        });
+      });
+    });
+    if (!created.length) {
+      showToast("Nenhuma data nova neste período (ou o período é inválido).");
+      return;
+    }
+    if (created.length > 400) {
+      showToast("Período muito longo. Gere no máximo um semestre por vez.");
+      return;
+    }
+    changeState((next) => {
+      next.diary.push(...created);
+      next.diary = L.renumberAll(next.diary);
+    }, `${created.length} aulas previstas criadas. Marque feriados como “Sem aula”.`);
+    planDialog.close();
+  }
+
+  function selectedTurma() {
+    return turmaList().find((entry) => entry.key === diaryTurma);
+  }
+
+  async function copyDiary() {
+    const turma = selectedTurma();
+    if (!turma) return;
+    const rows = L.diaryRows(state.diary.filter((entry) => L.diaryKey(entry) === turma.key));
+    const copied = await copyText(L.toTSV(rows));
+    showToast(copied ? "Tabela copiada. Cole no Excel, Planilhas ou no sistema da instituição." : "Não foi possível copiar. Use “Baixar CSV”.");
+  }
+
+  function exportDiary() {
+    const turma = selectedTurma();
+    if (!turma) return;
+    const rows = L.diaryRows(state.diary.filter((entry) => L.diaryKey(entry) === turma.key));
+    downloadText(`diario_${slug(turma.subject)}_${slug(state.activeSemester)}.csv`, L.toCSV(rows));
+    showToast("CSV do diário gerado neste dispositivo.");
+  }
+
+  function exportDiaryAll() {
+    const rows = [["Disciplina", "Instituição", "Aula nº", "Data", "Conteúdo ministrado", "Observações", "Situação"]];
+    turmaList().forEach((turma) => {
+      diaryEntriesFor(turma.key).forEach((entry) => rows.push([
+        turma.subject, institutionName(turma.institutionId), L.lessonLabel(entry), L.formatBR(entry.date), entry.content, entry.notes, entry.status,
+      ]));
+    });
+    if (rows.length === 1) {
+      showToast("O diário deste semestre está vazio.");
+      return;
+    }
+    downloadText(`diario_completo_${slug(state.activeSemester)}.csv`, L.toCSV(rows));
+    showToast("CSV de todas as disciplinas gerado.");
+  }
+
+  async function copyDiaryField(id, field) {
+    const entry = state.diary.find((item) => item.id === id);
+    if (!entry) return;
+    const text = field === "notes" ? entry.notes : entry.content;
+    if (!text.trim()) {
+      showToast("Este campo ainda está vazio.");
+      return;
+    }
+    showToast((await copyText(text)) ? "Conteúdo copiado." : "Não foi possível copiar.");
+  }
+
+  function printDiary() {
+    document.body.classList.add("printing");
+    window.addEventListener("afterprint", () => document.body.classList.remove("printing"), { once: true });
+    window.print();
+  }
+
+  // ------------------------------------------------------------------ Ponto: confirmação e esquecimentos
+
+  const confirmLabel = (log) => (log.confirmed === true ? " · ✓ confirmado" : log.confirmed === false ? " · não concluído" : log.at ? " · aguardando confirmação" : "");
+
+  function setPontoConfirmation(id, value) {
+    changeState((next) => {
+      const log = next.pontoLogs.find((entry) => entry.id === id);
+      if (log) log.confirmed = value;
+    }, value ? "Ponto confirmado no histórico." : "Ok, vamos lembrar você de registrar.");
+  }
+
+  function addManualPonto(classId, phase) {
+    const item = state.classes.find((entry) => entry.id === classId);
+    if (!item) return;
+    changeState((next) => {
+      next.pontoLogs.unshift({
+        id: makeId("log"), classId: item.id, isoDate: todayISO(), at: Date.now(),
+        timestamp: new Date().toLocaleString("pt-BR"), institutionName: institutionName(item.institutionId),
+        shift: item.shift, phase, subject: item.subject, campus: item.campus, url: "", confirmed: true, manual: true,
+      });
+    }, `${phase} marcada como registrada.`);
+  }
+
+  function exportLogs() {
+    if (!state.pontoLogs.length) {
+      showToast("Ainda não há batidas no histórico.");
+      return;
+    }
+    const rows = [["Data/hora", "Instituição", "Disciplina", "Campus", "Fase", "Situação", "Origem"]];
+    state.pontoLogs.forEach((log) => rows.push([
+      log.timestamp, log.institutionName, log.subject, log.campus, log.phase,
+      log.confirmed === true ? "Confirmado" : log.confirmed === false ? "Não concluído" : "Sem confirmação",
+      log.manual ? "Marcado manualmente" : "Aberto pelo app",
+    ]));
+    downloadText(`pontual_historico_ponto.csv`, L.toCSV(rows));
+    showToast("Histórico de ponto exportado.");
+  }
+
+  // ------------------------------------------------------------------ Backup e armazenamento
+
+  function backupAgeDays() {
+    const time = state.settings.lastBackupAt ? Date.parse(state.settings.lastBackupAt) : NaN;
+    return Number.isFinite(time) ? Math.floor((Date.now() - time) / 86_400_000) : null;
+  }
+
+  function needsBackup() {
+    if (!state.classes.length && !state.diary.length) return false;
+    const age = backupAgeDays();
+    return age === null || age >= state.settings.backupReminderDays;
+  }
+
+  const backupText = () => {
+    const age = backupAgeDays();
+    return age === null ? "nunca feito" : age === 0 ? "hoje" : `há ${age} dia${age === 1 ? "" : "s"}`;
+  };
+
+  function renderBackupStatus() {
+    const persisted = storagePersisted === true ? "protegido pelo navegador" : storagePersisted === false ? "pode ser apagado pelo navegador em pouco espaço" : "indisponível";
+    return `
+      <section class="card settings-section">
+        <div><span class="eyebrow">SEGURANÇA DOS DADOS</span><h2>Backup e proteção</h2></div>
+        <div class="data-row"><div class="data-row-copy"><strong>Último backup: ${escapeHTML(backupText())}</strong><small>Lembrete a cada ${state.settings.backupReminderDays} dias</small></div></div>
+        <div class="data-row"><div class="data-row-copy"><strong>Armazenamento: ${escapeHTML(persisted)}</strong><small>Limpar dados do navegador apaga o diário. Exporte backups.</small></div>
+          ${storagePersisted === false ? `<button type="button" class="button button-secondary button-small" data-action="persist-storage">Proteger</button>` : ""}</div>
+      </section>`;
+  }
+
+  async function protectStorage() {
+    try {
+      storagePersisted = Boolean(await navigator.storage?.persist?.());
+    } catch {
+      storagePersisted = false;
+    }
+    showToast(storagePersisted ? "Armazenamento protegido neste navegador." : "O navegador não concedeu a proteção. Mantenha backups em dia.");
+    render();
+  }
+
+  // ------------------------------------------------------------------ Lembretes e calendário
+
+  let reminderTimers = [];
+
+  async function showReminder(event) {
+    const options = { body: event.body, tag: event.tag, icon: "/static/core/icon.svg", badge: "/static/core/icon.svg", data: { url: "/" } };
+    try {
+      const registration = await navigator.serviceWorker?.ready;
+      if (registration) {
+        await registration.showNotification(event.title, options);
+        return;
+      }
+    } catch { /* fall through to the page-level API */ }
+    try { new Notification(event.title, options); } catch { /* notifications unavailable */ }
+  }
+
+  async function scheduleReminders() {
+    reminderTimers.forEach((timer) => window.clearTimeout(timer));
+    reminderTimers = [];
+    if (!state?.settings.remindersEnabled || !("Notification" in window) || Notification.permission !== "granted") return;
+    const now = new Date();
+    const events = L.reminderEvents(sortedClasses(), now, state.settings.reminderLead);
+    events.forEach((event) => reminderTimers.push(window.setTimeout(() => showReminder(event), event.at - now)));
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+    reminderTimers.push(window.setTimeout(scheduleReminders, midnight - now));
+    // Chrome (Android) can fire these even with the app closed; elsewhere the timers above apply.
+    if ("showTrigger" in Notification.prototype && window.TimestampTrigger && "serviceWorker" in navigator) {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        for (const event of events) {
+          await registration.showNotification(event.title, {
+            body: event.body, tag: event.tag, icon: "/static/core/icon.svg", data: { url: "/" },
+            showTrigger: new window.TimestampTrigger(event.at.getTime()),
+          });
+        }
+      } catch { /* timers remain as fallback */ }
+    }
+  }
+
+  async function toggleReminders() {
+    if (state.settings.remindersEnabled) {
+      await changeState((next) => { next.settings.remindersEnabled = false; }, "Lembretes desativados.");
+      return;
+    }
+    if (!("Notification" in window)) {
+      showToast("Este navegador não oferece notificações. Use o calendário (.ics).");
+      return;
+    }
+    const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+    if (permission !== "granted") {
+      showToast("Permissão negada. Libere as notificações nas configurações do navegador.");
+      return;
+    }
+    await changeState((next) => { next.settings.remindersEnabled = true; }, "Lembretes ativados.");
+  }
+
+  function exportICS() {
+    const form = document.getElementById("ics-form");
+    if (!form.reportValidity()) return;
+    const data = new FormData(form);
+    const classes = sortedClasses();
+    if (!classes.length) {
+      showToast("Cadastre aulas na grade antes de exportar o calendário.");
+      return;
+    }
+    try {
+      const ics = L.buildICS({
+        classes, institutionName, startISO: String(data.get("start")), endISO: String(data.get("end")), lead: Number(data.get("lead")),
+      });
+      downloadText(`pontual_grade_${slug(state.activeSemester)}.ics`, ics, "text/calendar;charset=utf-8");
+      showToast("Calendário gerado. Abra o arquivo para adicionar à sua agenda.");
+    } catch (error) {
+      showToast(error.message);
+    }
+  }
+
+  function renderReminderSettings() {
+    const supported = "Notification" in window;
+    const permission = supported ? Notification.permission : "unsupported";
+    const status = !supported ? "Sem suporte neste navegador"
+      : permission === "denied" ? "Bloqueado nas configurações do navegador"
+        : state.settings.remindersEnabled && permission === "granted" ? "Ativados" : "Desativados";
+    const start = new Date();
+    return `
+      <section class="card settings-section">
+        <div><span class="eyebrow">NÃO PERCA O PONTO</span><h2>Lembretes e calendário</h2>
+          <p class="card-description">Receba um aviso antes de cada janela de ponto (entrada e saída).</p></div>
+        <div class="data-row"><div class="data-row-copy"><strong>Notificações: ${escapeHTML(status)}</strong><small>Funcionam com o app aberto ou instalado na tela inicial. Em alguns Androids chegam até com o app fechado.</small></div>
+          <button type="button" class="button ${state.settings.remindersEnabled ? "button-quiet" : "button-primary"} button-small" data-action="toggle-reminders" ${permission === "denied" || !supported ? "disabled" : ""}>${state.settings.remindersEnabled ? "Desativar" : "Ativar"}</button></div>
+        <label>Avisar antes da janela abrir
+          <select data-setting="reminderLead">${[5, 10, 15].map((minutes) => `<option value="${minutes}" ${state.settings.reminderLead === minutes ? "selected" : ""}>${minutes} minutos</option>`).join("")}</select></label>
+        <hr class="section-divider">
+        <form id="ics-form" class="form-stack" onsubmit="return false">
+          <div><h3>Exportar para a agenda do celular</h3>
+            <p class="card-description">Alarmes garantidos: gera um arquivo .ics com a grade semanal repetida no período, aceito por Google Agenda, Apple Calendário e Outlook.</p></div>
+          <div class="form-grid">
+            <label>De<input type="date" name="start" required value="${L.toISODate(start)}"></label>
+            <label>Até<input type="date" name="end" required value="${L.toISODate(L.addDays(start, 17 * 7))}"></label>
+          </div>
+          <label>Alarme antes da aula<select name="lead">${[10, 15, 30, 60].map((minutes) => `<option value="${minutes}" ${minutes === 15 ? "selected" : ""}>${minutes} minutos</option>`).join("")}</select></label>
+          <button type="button" class="button button-secondary" data-action="export-ics">Baixar calendário (.ics)</button>
+        </form>
+      </section>`;
+  }
+
+  // ------------------------------------------------------------------ Home: alertas e primeiros passos
+
+  function renderOnboarding() {
+    const hasInstitution = state.institutions.length > 0;
+    const hasLink = state.institutions.some((item) => safeHttpUrl(item.defaultPontoUrl)) || state.pontoRules.length > 0;
+    const hasClass = state.classes.some((item) => item.semester === state.activeSemester);
+    if (hasInstitution && hasLink && hasClass) return "";
+    const step = (done, title, text, button) => `
+      <li class="check-step ${done ? "is-done" : ""}"><span class="step-mark" aria-hidden="true">${done ? "✓" : ""}</span>
+        <div><strong>${title}</strong><small>${text}</small></div>${done ? "" : button}</li>`;
+    return `
+      <section class="card alert-card is-primary">
+        <span class="eyebrow">COMECE AQUI</span><h2>Configure o Pontual em 3 passos</h2>
+        <ol class="check-steps">
+          ${step(hasInstitution, "Cadastre sua instituição", "Nome e link do portal de ponto.", `<button type="button" class="button button-primary button-small" data-action="go-page" data-target="settings">Abrir Ajustes</button>`)}
+          ${step(hasLink, "Informe o link do ponto", "Para o botão “Abrir sistema de ponto” funcionar.", `<button type="button" class="button button-secondary button-small" data-action="go-page" data-target="settings">Configurar</button>`)}
+          ${step(hasClass, "Adicione suas aulas", "Uma a uma ou importando uma planilha.", `<button type="button" class="button button-secondary button-small" data-action="add-class">Nova aula</button> <button type="button" class="button button-quiet button-small" data-action="go-page" data-target="data">Importar planilha</button>`)}
+        </ol>
+      </section>`;
+  }
+
+  function renderHomeAlerts() {
+    const now = new Date();
+    const cards = [renderOnboarding()];
+    state.pontoLogs.filter((log) => log.confirmed === null && log.at && Date.now() - log.at < SIX_HOURS).slice(0, 2).forEach((log) => {
+      cards.push(`
+        <section class="card alert-card is-info">
+          <span class="eyebrow">CONFIRMAR PONTO</span>
+          <h2>Você concluiu o registro de ${escapeHTML(log.phase.toLowerCase())}?</h2>
+          <p class="card-description">${escapeHTML(log.subject)} · ${escapeHTML(log.institutionName)}</p>
+          <div class="alert-actions"><button type="button" class="button button-primary button-small" data-action="confirm-ponto" data-id="${escapeHTML(log.id)}" data-value="true">Sim, registrei</button>
+            <button type="button" class="button button-quiet button-small" data-action="confirm-ponto" data-id="${escapeHTML(log.id)}" data-value="false">Ainda não</button></div>
+        </section>`);
+    });
+    const missing = L.missingPonto(sortedClasses(), state.pontoLogs.filter((log) => log.classId), now);
+    if (missing.length) {
+      cards.push(`
+        <section class="card alert-card is-warning">
+          <span class="eyebrow">PONTO PENDENTE</span><h2>Possível ponto esquecido hoje</h2>
+          <div class="item-list">${missing.slice(0, 4).map(({ item, phase }) => {
+            const link = resolvePontoUrl(item).url;
+            return `<div class="data-row"><div class="data-row-copy"><strong>${escapeHTML(phase)} · ${escapeHTML(item.subject)}</strong><small>${escapeHTML(item.startTime)}–${escapeHTML(item.endTime)} · ${escapeHTML(institutionName(item.institutionId))}</small></div>
+              <div class="data-row-actions">${link ? `<a class="button button-quiet button-small" href="${escapeHTML(link)}" target="_blank" rel="noopener noreferrer">Abrir</a>` : ""}
+              <button type="button" class="button button-secondary button-small" data-action="manual-ponto" data-class-id="${escapeHTML(item.id)}" data-phase="${escapeHTML(phase)}">Já registrei</button></div></div>`;
+          }).join("")}</div>
+        </section>`);
+    }
+    const gaps = todayDiaryGaps(now);
+    if (gaps.length) {
+      cards.push(`
+        <section class="card alert-card is-primary">
+          <span class="eyebrow">DIÁRIO</span><h2>${gaps.length === 1 ? "1 aula de hoje" : `${gaps.length} aulas de hoje`} sem registro</h2>
+          <p class="card-description">Anote o conteúdo agora, enquanto está fresco.</p>
+          <div class="alert-actions">${gaps.slice(0, 3).map((item) => `<button type="button" class="button button-primary button-small" data-action="add-diary" data-class-id="${escapeHTML(item.id)}" data-date="${todayISO()}">${escapeHTML(item.subject)}</button>`).join("")}</div>
+        </section>`);
+    }
+    if (needsBackup()) {
+      cards.push(`
+        <section class="card alert-card is-warning">
+          <span class="eyebrow">BACKUP</span><h2>Seus dados só existem neste aparelho</h2>
+          <p class="card-description">Último backup: ${escapeHTML(backupText())}. Exporte um arquivo para não perder grade e diário.</p>
+          <div class="alert-actions"><button type="button" class="button button-primary button-small" data-action="export-backup">Fazer backup agora</button></div>
+        </section>`);
+    }
+    const html = cards.filter(Boolean).join("");
+    return html ? `<div class="alert-stack">${html}</div>` : "";
+  }
+
+  // ------------------------------------------------------------------ Grade: carga horária, conflitos, semana
+
+  function conflictNames(item) {
+    return (conflictMap[item.id] || []).map((id) => state.classes.find((entry) => entry.id === id)?.subject).filter(Boolean);
+  }
+
+  function renderScheduleSummary() {
+    const classes = sortedClasses();
+    if (!classes.length) return "";
+    const load = L.weeklyWorkload(classes);
+    const conflicts = classes.filter((item) => conflictMap[item.id]);
+    const perInstitution = Object.entries(load.perInstitution)
+      .map(([id, minutes]) => `<span class="tag">${escapeHTML(institutionName(id))}: ${escapeHTML(L.formatDuration(minutes))}</span>`).join("");
+    return `
+      <section class="card summary-card">
+        <div class="card-heading"><div><span class="eyebrow">CARGA SEMANAL</span><h2>${escapeHTML(L.formatDuration(load.minutes))} <small class="muted">· ${load.periods} aulas de 50 min</small></h2></div>
+          <div class="segmented" role="group" aria-label="Modo de exibição">
+            <button type="button" data-action="schedule-view" data-view="list" aria-pressed="${scheduleView === "list"}">Lista</button>
+            <button type="button" data-action="schedule-view" data-view="week" aria-pressed="${scheduleView === "week"}">Semana</button>
+          </div></div>
+        <div class="class-tags">${perInstitution}</div>
+        ${conflicts.length ? `<div class="notice is-danger"><strong>Conflito de horário:</strong> ${escapeHTML([...new Set(conflicts.map((item) => `${item.subject} (${L.DAY_SHORT[item.dayOfWeek]} ${item.startTime})`))].join(", "))}.</div>` : ""}
+      </section>`;
+  }
+
+  function renderWeekView() {
+    const classes = sortedClasses();
+    const days = [1, 2, 3, 4, 5, 6];
+    if (classes.some((item) => Number(item.dayOfWeek) === 0)) days.push(0);
+    const first = Math.floor(Math.min(...classes.map((item) => L.timeToMinutes(item.startTime))) / 60) * 60;
+    const last = Math.ceil(Math.max(...classes.map((item) => L.timeToMinutes(item.endTime))) / 60) * 60;
+    const height = (last - first) * WEEK_SCALE;
+    const hours = [];
+    for (let minute = first; minute < last; minute += 60) hours.push(minute);
+    const today = new Date().getDay();
+    const block = (item) => {
+      const cluster = [item.id, ...(conflictMap[item.id] || [])].sort();
+      const width = 100 / cluster.length;
+      const left = cluster.indexOf(item.id) * width;
+      const top = (L.timeToMinutes(item.startTime) - first) * WEEK_SCALE;
+      const size = Math.max(28, L.durationMinutes(item) * WEEK_SCALE - 2);
+      return `<button type="button" class="week-block ${conflictMap[item.id] ? "is-conflict" : ""}" data-action="edit-class" data-id="${escapeHTML(item.id)}"
+        style="top:${top}px;height:${size}px;left:calc(${left}% + 2px);width:calc(${width}% - 4px)" aria-label="${escapeHTML(item.subject)}, ${escapeHTML(item.startTime)} às ${escapeHTML(item.endTime)}. Editar">
+        <strong>${escapeHTML(item.subject)}</strong><small>${escapeHTML(item.startTime)}–${escapeHTML(item.endTime)}</small></button>`;
+    };
+    return `
+      <section class="card week-card">
+        <div class="week-scroll" tabindex="0" aria-label="Grade semanal">
+          <div class="week-grid" style="--cols:${days.length};--week-height:${height}px">
+            <div class="week-corner"></div>
+            ${days.map((day) => `<div class="week-dayhead ${day === today ? "is-today" : ""}">${L.DAY_SHORT[day]}</div>`).join("")}
+            <div class="week-axis">${hours.map((minute) => `<span style="top:${(minute - first) * WEEK_SCALE}px">${L.minutesToTime(minute)}</span>`).join("")}</div>
+            ${days.map((day) => `<div class="week-col ${day === today ? "is-today" : ""}">${classes.filter((item) => Number(item.dayOfWeek) === day).map(block).join("")}</div>`).join("")}
+          </div>
+        </div>
+      </section>`;
+  }
+
+  // ------------------------------------------------------------------ Planilha de aulas
+
+  function renderSheetImport() {
+    return `
+      <section class="card settings-section">
+        <div><span class="eyebrow">IMPORTAR GRADE</span><h2>Planilha de aulas</h2>
+          <p class="card-description">Preencha no Excel/Planilhas e importe de uma vez. Colunas: Disciplina, Instituição, Dia, Início, Término (opcionais: Turno, Campus, Espaço, Sala, Observações). Salve como CSV.</p></div>
+        <button type="button" class="button button-secondary button-wide" data-action="download-sheet-template">⇩ Baixar modelo (.csv)</button>
+        <button type="button" class="button button-primary button-wide" data-action="import-sheet">＋ Importar planilha de aulas</button>
+      </section>`;
+  }
+
+  async function importSheet(file) {
+    const { rows, errors } = L.parseClassSheet(await file.text());
+    if (!rows.length) throw new Error(errors[0] || "Nenhuma aula encontrada na planilha.");
+    const ignored = errors.length ? `\n\n${errors.length} linha(s) serão ignoradas:\n- ${errors.slice(0, 5).join("\n- ")}` : "";
+    if (!window.confirm(`Importar ${rows.length} aula(s) para o semestre ${state.activeSemester}?${ignored}`)) return;
+    await changeState((next) => {
+      const norm = (value) => String(value).trim().toLocaleLowerCase("pt-BR");
+      rows.forEach((row) => {
+        const name = row.institution || next.institutions[0]?.name || "Minha instituição";
+        let institution = next.institutions.find((entry) => norm(entry.name) === norm(name));
+        if (!institution) {
+          institution = { id: makeId("institution"), name, logoUri: "", defaultPontoUrl: "" };
+          next.institutions.push(institution);
+        }
+        next.classes.push({
+          id: makeId("class"), semester: next.activeSemester, institutionId: institution.id, dayOfWeek: row.dayOfWeek,
+          shift: row.shift, startTime: row.startTime, endTime: row.endTime, subject: row.subject, campus: row.campus,
+          roomType: row.roomType, roomNumber: row.roomNumber, notes: row.notes,
+        });
+      });
+    }, `${rows.length} aula(s) importada(s). Configure o link de ponto das novas instituições em Ajustes.`);
+  }
+
+  // ------------------------------------------------------------------ Dispatcher das novas ações
+
+  function handleExtraAction(action, button) {
+    const { id } = button.dataset;
+    switch (action) {
+      case "go-page": setPage(button.dataset.target, true); return true;
+      case "set-diary-filter": diaryFilter = button.dataset.filter; render(); return true;
+      case "add-diary": openDiaryDialog({ classId: button.dataset.classId, date: button.dataset.date }); return true;
+      case "edit-diary": openDiaryDialog({ id }); return true;
+      case "close-diary": diaryDialog.close(); return true;
+      case "save-diary": saveDiary(); return true;
+      case "delete-diary": deleteDiary(); return true;
+      case "plan-diary": openPlanDialog(); return true;
+      case "close-plan": planDialog.close(); return true;
+      case "save-plan": savePlan(); return true;
+      case "copy-diary": copyDiary(); return true;
+      case "copy-field": copyDiaryField(id, button.dataset.field); return true;
+      case "export-diary": exportDiary(); return true;
+      case "export-diary-all": exportDiaryAll(); return true;
+      case "print-diary": printDiary(); return true;
+      case "schedule-view": scheduleView = button.dataset.view; render(); return true;
+      case "toggle-reminders": toggleReminders(); return true;
+      case "export-ics": exportICS(); return true;
+      case "confirm-ponto": setPontoConfirmation(id, button.dataset.value === "true"); return true;
+      case "manual-ponto": addManualPonto(button.dataset.classId, button.dataset.phase); return true;
+      case "export-logs": exportLogs(); return true;
+      case "persist-storage": protectStorage(); return true;
+      case "download-sheet-template":
+        downloadText("pontual_modelo_grade.csv", L.classSheetTemplate());
+        return true;
+      case "import-sheet": document.getElementById("sheet-file").click(); return true;
+      default: return false;
+    }
+  }
+
+  function handleExtraChange(event) {
+    const target = event.target;
+    if (target.matches?.("[data-diary-select]")) {
+      diaryTurma = target.value;
+      render();
+      return true;
+    }
+    if (target.dataset?.setting === "reminderLead") {
+      changeState((next) => { next.settings.reminderLead = Number(target.value) || 5; }, "Antecedência atualizada.");
+      return true;
+    }
+    if (target.id === "sheet-file" && target.files?.[0]) {
+      importSheet(target.files[0])
+        .catch((error) => showToast(`Não foi possível importar: ${error.message}`))
+        .finally(() => { target.value = ""; });
+      return true;
+    }
+    if (target.form === diaryForm && ["date", "turma"].includes(target.name) && !diaryEditingId) {
+      autofillDiaryPeriods();
+      return true;
+    }
+    return false;
+  }
+
   function render() {
     renderHeader();
-    main.innerHTML = activePage === "home"
-      ? renderHome()
-      : activePage === "schedule"
-        ? renderSchedule()
-        : activePage === "settings"
-          ? renderSettings()
-          : renderData();
+    conflictMap = L.detectConflicts(sortedClasses());
+    main.innerHTML = ({
+      home: renderHome, schedule: renderSchedule, diary: renderDiary, settings: renderSettings, data: renderData,
+    }[activePage] || renderHome)();
     document.querySelectorAll(".nav-item").forEach((button) => {
       button.classList.toggle("is-active", button.dataset.page === activePage);
       if (button.dataset.page === activePage) button.setAttribute("aria-current", "page");
@@ -517,7 +1333,7 @@
   }
 
   function setPage(page, focusMain = false) {
-    if (!["home", "schedule", "settings", "data"].includes(page)) return;
+    if (!["home", "schedule", "diary", "settings", "data"].includes(page)) return;
     activePage = page;
     render();
     if (focusMain) main.focus();
@@ -606,11 +1422,19 @@
       roomNumber: String(formData.get("roomNumber") || "").trim(),
       notes: String(formData.get("notes") || "").trim(),
     };
+    const previous = state.classes.find((entry) => entry.id === id);
+    const clashes = L.detectConflicts([...state.classes.filter((entry) => entry.id !== id), item])[id] || [];
+    const clashNames = clashes.map((other) => state.classes.find((entry) => entry.id === other)?.subject).filter(Boolean);
     changeState((next) => {
       const index = next.classes.findIndex((entry) => entry.id === id);
       if (index >= 0) next.classes[index] = item;
       else next.classes.push(item);
-    }, "Aula salva na grade deste dispositivo.");
+      if (previous && (previous.subject !== item.subject || previous.institutionId !== item.institutionId) &&
+        !next.classes.some((entry) => entry.id !== id && L.diaryKey(entry) === L.diaryKey(previous))) {
+        next.diary = L.renumberAll(next.diary.map((entry) => (L.diaryKey(entry) === L.diaryKey(previous)
+          ? { ...entry, subject: item.subject, institutionId: item.institutionId } : entry)));
+      }
+    }, clashNames.length ? `Aula salva, mas conflita com: ${clashNames.join(", ")}.` : "Aula salva na grade deste dispositivo.");
     dialog.close();
   }
 
@@ -696,6 +1520,8 @@
   }
 
   function exportBackup() {
+    state = { ...state, settings: { ...state.settings, lastBackupAt: new Date().toISOString() } };
+    persistState().catch(() => {});
     const content = JSON.stringify(state, null, 2);
     const blob = new Blob([content], { type: "application/json;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -707,6 +1533,7 @@
     link.remove();
     URL.revokeObjectURL(url);
     showToast("Backup exportado. O arquivo não foi enviado ao servidor.");
+    render();
   }
 
   async function importBackup(file) {
@@ -734,6 +1561,10 @@
     await changeState((next) => {
       next.pontoLogs.unshift({
         id: makeId("log"),
+        classId: item.id,
+        isoDate: L.toISODate(new Date()),
+        at: Date.now(),
+        confirmed: null,
         timestamp: new Date().toLocaleString("pt-BR"),
         institutionName: institutionName(item.institutionId),
         shift: item.shift,
@@ -759,6 +1590,7 @@
     const button = event.target.closest("[data-action]");
     if (!button) return;
     const { action, id } = button.dataset;
+    if (handleExtraAction(action, button, event)) return;
 
     if (action === "select-day") {
       selectedDay = Number(button.dataset.day);
@@ -844,6 +1676,7 @@
 
   function handleChange(event) {
     const target = event.target;
+    if (handleExtraChange(event)) return;
     if (target === semesterSelect) {
       changeState((next) => { next.activeSemester = semesterSelect.value; }, `Semestre ${semesterSelect.value} ativado.`);
     } else if (target.id === "backup-file" && target.files?.[0]) {
@@ -881,7 +1714,14 @@
         await persistState();
       }
     }
-    render();
+    const requestedPage = new URLSearchParams(window.location.search).get("page");
+    if (requestedPage) setPage(requestedPage);
+    else render();
+    scheduleReminders();
+    navigator.storage?.persisted?.().then((value) => {
+      storagePersisted = value;
+      if (!value && (state.classes.length || state.diary.length)) navigator.storage.persist?.().then((granted) => { storagePersisted = granted; }).catch(() => {});
+    }).catch(() => {});
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/service-worker.js")
         .catch((error) => showToast(`O modo offline não pôde ser ativado: ${error.message}`));
@@ -891,6 +1731,13 @@
     }, 60_000);
   }
 
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible" || !state) return;
+    scheduleReminders();
+    const waiting = state.pontoLogs.some((log) => log.confirmed === null && log.at && Date.now() - log.at < 30 * 60 * 1000);
+    if (waiting && activePage !== "home") setPage("home");
+    else if (activePage === "home") render();
+  });
   document.addEventListener("click", handleClick);
   document.addEventListener("change", handleChange);
   document.addEventListener("keydown", handleFormKeydown);

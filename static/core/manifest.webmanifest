@@ -7,6 +7,11 @@
   "display": "standalone",
   "background_color": "#0b0b0d",
   "theme_color": "#0b0b0d",
+  "shortcuts": [
+    { "name": "Ponto", "short_name": "Ponto", "url": "/?page=home" },
+    { "name": "Diário de classe", "short_name": "Diário", "url": "/?page=diary" },
+    { "name": "Grade", "short_name": "Grade", "url": "/?page=schedule" }
+  ],
   "icons": [
     {
       "src": "/static/core/icon.svg",

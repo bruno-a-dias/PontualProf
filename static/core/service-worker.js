@@ -1,9 +1,10 @@
-const CACHE_NAME = "pontual-shell-v5";
+const CACHE_NAME = "pontual-shell-v6";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
-  "/static/core/app.css?v=5",
-  "/static/core/app.js?v=5",
+  "/static/core/app.css?v=6",
+  "/static/core/lib.js?v=6",
+  "/static/core/app.js?v=6",
   "/static/core/icon.svg",
 ];
 
@@ -20,6 +21,17 @@ self.addEventListener("activate", (event) => {
     )
   );
   self.clients.claim();
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      const open = clients.find((client) => "focus" in client);
+      return open ? open.focus() : self.clients.openWindow(target);
+    })
+  );
 });
 
 self.addEventListener("fetch", (event) => {

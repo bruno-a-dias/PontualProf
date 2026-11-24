@@ -9,7 +9,7 @@
     <link rel="manifest" href="{% url 'manifest' %}">
     <link rel="icon" href="{% static 'core/icon.svg' %}" type="image/svg+xml">
     <link rel="apple-touch-icon" href="{% static 'core/icon.svg' %}">
-    <link rel="stylesheet" href="{% static 'core/app.css' %}?v=5">
+    <link rel="stylesheet" href="{% static 'core/app.css' %}?v=6">
     <title>Pontual — Grade & Ponto</title>
   </head>
   <body>
@@ -25,11 +25,6 @@
         <div class="header-tools">
           <label class="sr-only" for="active-semester">Semestre ativo</label>
           <select id="active-semester" class="semester-select"></select>
-          <div class="theme-switch" role="group" aria-label="Tema visual">
-            <button type="button" data-theme-choice="light" aria-label="Tema claro">☼</button>
-            <button type="button" data-theme-choice="dark" aria-label="Tema escuro">◐</button>
-            <button type="button" data-theme-choice="rubro" aria-label="Tema rubro e ouro">●</button>
-          </div>
         </div>
       </header>
 
@@ -43,6 +38,9 @@
         </button>
         <button type="button" data-page="schedule" class="nav-item">
           <span aria-hidden="true">▦</span><small>Grade</small>
+        </button>
+        <button type="button" data-page="diary" class="nav-item">
+          <span aria-hidden="true">▤</span><small>Diário</small>
         </button>
         <button type="button" data-page="settings" class="nav-item">
           <span aria-hidden="true">⌘</span><small>Ajustes</small>
@@ -84,10 +82,59 @@
       </form>
     </dialog>
 
+    <dialog id="diary-dialog" class="class-dialog" aria-labelledby="diary-dialog-title">
+      <form id="diary-form" class="dialog-form" onsubmit="return false">
+        <div class="dialog-heading">
+          <div>
+            <span class="eyebrow">LIVRO DIÁRIO</span>
+            <h2 id="diary-dialog-title">Registrar aula</h2>
+          </div>
+          <button type="button" class="icon-button" data-action="close-diary" aria-label="Fechar">×</button>
+        </div>
+        <label>Disciplina / turma<select name="turma" required></select></label>
+        <div class="form-grid">
+          <label>Data<input name="date" type="date" required></label>
+          <label>Aulas no dia<input name="periods" type="number" min="1" max="8" step="1" value="1" required inputmode="numeric"></label>
+        </div>
+        <label>Situação<select name="status"></select></label>
+        <label>Conteúdo ministrado<textarea name="content" rows="5" maxlength="4000" placeholder="Ex.: Limites e continuidade — exercícios 1 a 8"></textarea></label>
+        <label>Observações<textarea name="notes" rows="2" maxlength="1000" placeholder="Opcional: prova marcada, material, pendências…"></textarea></label>
+        <div class="dialog-actions">
+          <button type="button" id="delete-diary" class="button button-quiet push-left" data-action="delete-diary" hidden>Excluir</button>
+          <button type="button" class="button button-quiet" data-action="close-diary">Cancelar</button>
+          <button type="button" class="button button-primary" data-action="save-diary">Salvar</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="plan-dialog" class="class-dialog" aria-labelledby="plan-dialog-title">
+      <form id="plan-form" class="dialog-form" onsubmit="return false">
+        <div class="dialog-heading">
+          <div>
+            <span class="eyebrow">LIVRO DIÁRIO</span>
+            <h2 id="plan-dialog-title">Gerar datas do semestre</h2>
+          </div>
+          <button type="button" class="icon-button" data-action="close-plan" aria-label="Fechar">×</button>
+        </div>
+        <p class="card-description" id="plan-summary"></p>
+        <p class="card-description">Cria uma linha “Prevista” para cada aula do período, já numerada. Depois é só preencher o conteúdo; feriados podem ser marcados como “Sem aula”.</p>
+        <div class="form-grid">
+          <label>Primeiro dia<input name="start" type="date" required></label>
+          <label>Último dia<input name="end" type="date" required></label>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" class="button button-quiet" data-action="close-plan">Cancelar</button>
+          <button type="button" class="button button-primary" data-action="save-plan">Gerar datas</button>
+        </div>
+      </form>
+    </dialog>
+
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <input id="sheet-file" class="sr-only" type="file" accept=".csv,.txt,text/csv,text/plain">
     <input id="backup-file" class="sr-only" type="file" accept="application/json,.json">
     <input id="profile-photo-file" class="sr-only" type="file" accept="image/*">
     <input id="institution-logo-file" class="sr-only" type="file" accept="image/*">
-    <script defer src="{% static 'core/app.js' %}?v=5"></script>
+    <script defer src="{% static 'core/lib.js' %}?v=6"></script>
+    <script defer src="{% static 'core/app.js' %}?v=6"></script>
   </body>
 </html>
