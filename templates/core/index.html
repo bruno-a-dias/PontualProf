@@ -1,0 +1,93 @@
+{% load static %}
+<!doctype html>
+<html lang="pt-BR" data-theme="rubro">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0b0b0d">
+    <meta name="description" content="Sua grade docente e ponto eletrônico, guardados neste dispositivo.">
+    <link rel="manifest" href="{% url 'manifest' %}">
+    <link rel="icon" href="{% static 'core/icon.svg' %}" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="{% static 'core/icon.svg' %}">
+    <link rel="stylesheet" href="{% static 'core/app.css' %}?v=4">
+    <title>Pontual — Grade & Ponto</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <a class="brand" href="#inicio" aria-label="Pontual, início">
+          <span class="brand-mark" aria-hidden="true">P</span>
+          <span class="brand-copy">
+            <strong>PONTUAL</strong>
+            <small>Grade &amp; Ponto</small>
+          </span>
+        </a>
+        <div class="header-tools">
+          <label class="sr-only" for="active-semester">Semestre ativo</label>
+          <select id="active-semester" class="semester-select"></select>
+          <div class="theme-switch" role="group" aria-label="Tema visual">
+            <button type="button" data-theme-choice="light" aria-label="Tema claro">☼</button>
+            <button type="button" data-theme-choice="dark" aria-label="Tema escuro">◐</button>
+            <button type="button" data-theme-choice="rubro" aria-label="Tema rubro e ouro">●</button>
+          </div>
+        </div>
+      </header>
+
+      <p class="privacy-note"><span class="privacy-dot"></span> Seus dados ficam neste dispositivo</p>
+
+      <main id="main-content" tabindex="-1" aria-live="polite"></main>
+
+      <nav class="bottom-nav" aria-label="Navegação principal">
+        <button type="button" data-page="home" class="nav-item is-active">
+          <span aria-hidden="true">◷</span><small>Ponto</small>
+        </button>
+        <button type="button" data-page="schedule" class="nav-item">
+          <span aria-hidden="true">▦</span><small>Grade</small>
+        </button>
+        <button type="button" data-page="settings" class="nav-item">
+          <span aria-hidden="true">⌘</span><small>Ajustes</small>
+        </button>
+        <button type="button" data-page="data" class="nav-item">
+          <span aria-hidden="true">⇧</span><small>Dados</small>
+        </button>
+      </nav>
+    </div>
+
+    <dialog id="class-dialog" class="class-dialog" aria-labelledby="class-dialog-title">
+      <form id="class-form" class="dialog-form" onsubmit="return false">
+        <div class="dialog-heading">
+          <div>
+            <span class="eyebrow">GRADE DOCENTE</span>
+            <h2 id="class-dialog-title">Nova aula</h2>
+          </div>
+          <button type="button" class="icon-button" data-action="close-class" aria-label="Fechar">×</button>
+        </div>
+        <input type="hidden" name="id">
+        <label>Disciplina<input name="subject" required maxlength="120" placeholder="Ex.: Arquitetura de Software"></label>
+        <div class="form-grid">
+          <label>Instituição<select name="institutionId" required></select></label>
+          <label>Dia da semana<select name="dayOfWeek" required></select></label>
+          <label>Turno<select name="shift" required>
+            <option>Matutino</option><option>Especial</option><option>Vespertino</option><option>Noturno</option>
+          </select></label>
+          <label>Campus<input name="campus" required maxlength="100" placeholder="Campus Sul"></label>
+          <label>Início<input name="startTime" type="time" required value="08:15"></label>
+          <label>Término<input name="endTime" type="time" required value="11:00"></label>
+          <label>Espaço<select name="roomType"><option>Sala</option><option>Laboratório</option></select></label>
+          <label>Sala / laboratório<input name="roomNumber" required maxlength="40" placeholder="B-104"></label>
+        </div>
+        <label>Observações<textarea name="notes" rows="2" maxlength="500" placeholder="Opcional"></textarea></label>
+        <div class="dialog-actions">
+          <button type="button" class="button button-quiet" data-action="close-class">Cancelar</button>
+          <button type="button" class="button button-primary" data-action="save-class">Salvar aula</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <input id="backup-file" class="sr-only" type="file" accept="application/json,.json">
+    <input id="profile-photo-file" class="sr-only" type="file" accept="image/*">
+    <input id="institution-logo-file" class="sr-only" type="file" accept="image/*">
+    <script defer src="{% static 'core/app.js' %}?v=4"></script>
+  </body>
+</html>
