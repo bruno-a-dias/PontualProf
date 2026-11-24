@@ -1,9 +1,9 @@
-const CACHE_NAME = "pontual-shell-v4";
+const CACHE_NAME = "pontual-shell-v5";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
-  "/static/core/app.css?v=4",
-  "/static/core/app.js?v=4",
+  "/static/core/app.css?v=5",
+  "/static/core/app.js?v=5",
   "/static/core/icon.svg",
 ];
 

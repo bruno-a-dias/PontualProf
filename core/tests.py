@@ -21,4 +21,4 @@ class PwaViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Service-Worker-Allowed"], "/")
-        self.assertContains(response, "pontual-shell-v4")
+        self.assertContains(response, "pontual-shell-v5")

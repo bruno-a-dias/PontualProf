@@ -330,11 +330,13 @@
       : renderEmpty("Sem aulas neste dia", "Adicione uma aula à grade ou importe seu backup local.", `<button type="button" class="button button-secondary" data-action="add-class">Adicionar aula</button>`);
 
     return `
-      <div class="page-stack">
+      <div class="page-stack page-home">
         <div class="page-heading">
-          <div><span class="eyebrow">VISÃO DO DIA</span><h1>Olá${profile.name.trim() ? `, ${escapeHTML(profile.name.trim().split(/\s+/)[0])}` : ""}.</h1><p>${escapeHTML(todayLabel)} · semestre ${escapeHTML(state.activeSemester)}</p></div>
+          <div><span class="eyebrow">VISÃO DO DIA</span><h1>Olá${profile.name.trim() ? `, ${escapeHTML(profile.name.trim().split(/\s+/)[0].replace(/\.+$/, ""))}` : ""}.</h1><p>${escapeHTML(todayLabel)} · semestre ${escapeHTML(state.activeSemester)}</p></div>
         </div>
 
+        <div class="home-grid">
+        <div class="page-stack home-side">
         <section class="card profile-card" aria-label="Perfil docente">
           ${avatarMarkup(profile)}
           <div class="profile-copy"><h2>${escapeHTML(profile.name || "Seu perfil docente")}</h2><p>${escapeHTML(profile.role || "Configure seu nome e vínculo em Ajustes")}</p></div>
@@ -366,6 +368,8 @@
             ${pointLink.url ? `<a class="point-action" href="${escapeHTML(pointLink.url)}" target="_blank" rel="noopener noreferrer" data-action="record-ponto" data-class-id="${escapeHTML(activeClass.id)}"><span><strong>ABRIR SISTEMA DE PONTO</strong><small>${escapeHTML(pointLink.label)} · ${escapeHTML(pointLink.url)}</small></span><span class="point-arrow" aria-hidden="true">↗</span></a>` : `<div class="point-action" aria-disabled="true"><span><strong>Configure o link de ponto</strong><small>Adicione uma URL em Ajustes → Regras de ponto.</small></span></div>`}
           </section>` : ""}
 
+        </div>
+        <div class="page-stack home-main">
         <section class="day-strip" aria-label="Selecionar dia da semana">
           ${DAY_SHORT.map((day, index) => `<button type="button" class="day-button" data-action="select-day" data-day="${index}" aria-pressed="${selectedDay === index}"><span>${day}</span><small>${index === now.getDay() ? "Hoje" : ""}</small></button>`).join("")}
         </section>
@@ -374,6 +378,8 @@
           <div class="card-heading"><h2 id="today-classes-title">Aulas de ${escapeHTML(selectedDayLabel)}</h2><button type="button" class="button button-quiet button-small" data-action="add-class">＋ Aula</button></div>
           ${todayClasses}
         </section>
+        </div>
+        </div>
       </div>`;
   }
 
@@ -389,7 +395,7 @@
     return `
       <div class="page-stack">
         <div class="page-heading"><div><span class="eyebrow">ORGANIZAÇÃO</span><h1>Sua grade.</h1><p>Horários e salas do semestre ${escapeHTML(state.activeSemester)}.</p></div><button type="button" class="button button-primary" data-action="add-class">＋ Aula</button></div>
-        ${groups || renderEmpty("Sua grade está vazia", "Importe o backup do app anterior ou cadastre a primeira aula.", `<button type="button" class="button button-primary" data-action="add-class">Cadastrar aula</button>`)}
+        ${groups ? `<div class="card-grid">${groups}</div>` : renderEmpty("Sua grade está vazia", "Importe o backup do app anterior ou cadastre a primeira aula.", `<button type="button" class="button button-primary" data-action="add-class">Cadastrar aula</button>`)}
       </div>`;
   }
 
@@ -411,6 +417,7 @@
     return `
       <div class="page-stack">
         <div class="page-heading"><div><span class="eyebrow">PERSONALIZAÇÃO</span><h1>Ajustes.</h1><p>Seu perfil, vínculos e regras salvos neste navegador.</p></div></div>
+        <div class="card-grid">
 
         <section class="card settings-section">
           <div><span class="eyebrow">QUEM USA</span><h2>Perfil docente</h2></div>
@@ -456,6 +463,7 @@
             <label class="check-row"><input type="checkbox" name="clone" checked> Clonar aulas do semestre ativo</label>
           </form>
         </section>
+        </div>
       </div>`;
   }
 
@@ -465,6 +473,7 @@
     return `
       <div class="page-stack">
         <div class="page-heading"><div><span class="eyebrow">ARMAZENAMENTO LOCAL</span><h1>Seus dados.</h1><p>Privados neste navegador. Não são enviados ao Django.</p></div></div>
+        <div class="card-grid">
 
         <section class="card">
           <div class="card-heading"><div><span class="eyebrow">NESTE DISPOSITIVO</span><h2>Visão geral</h2></div><span class="tag is-accent">IndexedDB</span></div>
@@ -487,6 +496,7 @@
           <div><span class="eyebrow">HISTÓRICO LOCAL</span><h2>Batidas de ponto</h2></div>
           ${logs ? `<div class="item-list">${logs}</div>` : renderEmpty("Nenhuma batida registrada", "Ao abrir o portal pelo botão de ponto, o evento será anotado aqui.")}
         </section>
+        </div>
       </div>`;
   }
 
