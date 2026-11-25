@@ -464,6 +464,8 @@ Seus dados ficam no armazenamento do próprio navegador. Isso é bom para a priv
 ### Compartilhar o backup
 Se o seu navegador permite (em geral, no celular), aparece também **Compartilhar backup (WhatsApp, Drive…)**, logo abaixo de **Exportar**: o arquivo vai direto para o app que você escolher, sem precisar procurá-lo na pasta de downloads. Guarde-o em um lugar seguro (Google Drive, e-mail para você mesmo, pen drive).
 
+> O backup compartilhado sai como arquivo **`.txt`** (o conteúdo é o mesmo do `.json`), porque o Chrome do Android recusa compartilhar arquivos `.json` (“Permission denied”). Para restaurar, use **Importar backup JSON** e escolha esse arquivo normalmente: ele aceita `.json` e `.txt`.
+
 ### Quando fazer
 Pelo menos uma vez por mês. O app mostra o cartão **“Seus dados só existem neste aparelho”** quando o último backup passa de 30 dias.
 
@@ -502,6 +504,7 @@ Cada aparelho tem a sua própria cópia — **não há sincronização automáti
 | **O botão 🎙 não aparece** | Seu navegador não oferece reconhecimento de voz (use Chrome, Edge ou Safari recente). Se aparece e não funciona, permita o microfone para o site. |
 | **Não recebo notificações** | Ative em **Ajustes → Lembretes e calendário**, permita no navegador, e no iPhone instale o app na tela inicial. Para garantir, use o **.ics**. |
 | **O CSV abre tudo em uma coluna** | No Excel: **Dados → De Texto/CSV**, delimitador **Ponto e vírgula**. No Planilhas Google: **Arquivo → Importar**. |
+| **“Permission denied” ao compartilhar o backup** | Atualize o app (feche e abra duas vezes): a versão atual compartilha como `.txt`. Se ainda bloquear, use **Exportar backup JSON** e envie o arquivo manualmente. |
 | **Perdi os dados** | Importe o último backup em **Dados**. Sem backup não há como recuperar, porque nada é guardado em servidor. |
 | **O app mostra versão antiga** | Feche e abra o app duas vezes (o navegador atualiza em segundo plano). No navegador, recarregue a página (Ctrl+F5 / puxar para atualizar). |
 | **“Não foi possível abrir seus dados”** | Seu navegador pode estar em navegação privada ou bloqueando armazenamento. Use a janela normal e permita dados do site. |

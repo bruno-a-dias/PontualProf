@@ -9,7 +9,7 @@
     <link rel="manifest" href="{% url 'manifest' %}">
     <link rel="icon" href="{% static 'core/icon.svg' %}" type="image/svg+xml">
     <link rel="apple-touch-icon" href="{% static 'core/icon.svg' %}">
-    <link rel="stylesheet" href="{% static 'core/app.css' %}?v=9">
+    <link rel="stylesheet" href="{% static 'core/app.css' %}?v=10">
     <title>Pontual — Grade & Ponto</title>
   </head>
   <body>
@@ -225,10 +225,10 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <input id="sheet-file" class="sr-only" type="file" accept=".csv,.txt,text/csv,text/plain">
-    <input id="backup-file" class="sr-only" type="file" accept="application/json,.json">
+    <input id="backup-file" class="sr-only" type="file" accept="application/json,.json,text/plain,.txt">
     <input id="profile-photo-file" class="sr-only" type="file" accept="image/*">
     <input id="institution-logo-file" class="sr-only" type="file" accept="image/*">
-    <script defer src="{% static 'core/lib.js' %}?v=9"></script>
-    <script defer src="{% static 'core/app.js' %}?v=9"></script>
+    <script defer src="{% static 'core/lib.js' %}?v=10"></script>
+    <script defer src="{% static 'core/app.js' %}?v=10"></script>
   </body>
 </html>

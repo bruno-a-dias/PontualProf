@@ -1843,9 +1843,11 @@
 
   // ------------------------------------------------------------------ Compartilhar backup
 
+  // Chrome (Android) only lets web pages share "safe" file types (text, images, PDF…) and rejects
+  // .json with "Permission denied". The backup is shared as plain text; importing accepts it back.
   const canShareFiles = () => {
     try {
-      return Boolean(navigator.canShare && navigator.canShare({ files: [new File(["{}"], "pontual.json", { type: "application/json" })] }));
+      return Boolean(navigator.canShare && navigator.canShare({ files: [new File(["{}"], "pontual.txt", { type: "text/plain" })] }));
     } catch {
       return false;
     }
@@ -1853,7 +1855,7 @@
 
   async function shareBackup() {
     const stamped = { ...state, settings: { ...state.settings, lastBackupAt: new Date().toISOString() } };
-    const file = new File([JSON.stringify(stamped, null, 2)], `pontual_backup_${slug(state.activeSemester)}.json`, { type: "application/json" });
+    const file = new File([JSON.stringify(stamped, null, 2)], `pontual_backup_${slug(state.activeSemester)}.txt`, { type: "text/plain" });
     try {
       await navigator.share({ files: [file], title: "Backup do Pontual" });
       state = stamped;
@@ -1861,7 +1863,10 @@
       render();
       showToast("Backup compartilhado. Guarde o arquivo em um lugar seguro.");
     } catch (error) {
-      if (error.name !== "AbortError") showToast(`Não foi possível compartilhar: ${error.message}`);
+      if (error.name === "AbortError") return;
+      showToast(error.name === "NotAllowedError"
+        ? "O navegador bloqueou o compartilhamento. Use “Exportar backup JSON” e envie o arquivo manualmente."
+        : `Não foi possível compartilhar: ${error.message}`);
     }
   }
 

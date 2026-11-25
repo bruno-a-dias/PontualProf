@@ -21,7 +21,7 @@ class PwaViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Service-Worker-Allowed"], "/")
-        self.assertContains(response, "pontual-shell-v9")
+        self.assertContains(response, "pontual-shell-v10")
 
 
 class FeatureShellTests(TestCase):
@@ -82,3 +82,10 @@ class PlanAndExamShellTests(TestCase):
         response = self.client.get("/service-worker.js")
 
         self.assertContains(response, 'type: "navigate"')
+
+
+class BackupSharingShellTests(TestCase):
+    def test_backup_import_accepts_json_and_text_files(self):
+        response = self.client.get("/")
+
+        self.assertContains(response, 'accept="application/json,.json,text/plain,.txt"')
