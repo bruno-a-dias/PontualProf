@@ -1081,7 +1081,7 @@
       <section class="card settings-section">
         <div><span class="eyebrow">NÃO PERCA O PONTO</span><h2>Lembretes e calendário</h2>
           <p class="card-description">Receba um aviso antes de cada janela de ponto (entrada e saída).</p></div>
-        <div class="data-row"><div class="data-row-copy"><strong>Notificações: ${escapeHTML(status)}</strong><small>Funcionam com o app aberto ou instalado na tela inicial. Em alguns Androids chegam até com o app fechado.</small></div>
+        <div class="data-row"><div class="data-row-copy"><strong>Notificações: ${escapeHTML(status)}</strong><small>Funcionam com o app aberto ou em segundo plano (no iPhone, instalado na tela inicial). Não são garantidas com o app fechado: para isso use o calendário abaixo.</small></div>
           <button type="button" class="button ${state.settings.remindersEnabled ? "button-quiet" : "button-primary"} button-small" data-action="toggle-reminders" ${permission === "denied" || !supported ? "disabled" : ""}>${state.settings.remindersEnabled ? "Desativar" : "Ativar"}</button></div>
         <label>Avisar antes da janela abrir
           <select data-setting="reminderLead">${[5, 10, 15].map((minutes) => `<option value="${minutes}" ${state.settings.reminderLead === minutes ? "selected" : ""}>${minutes} minutos</option>`).join("")}</select></label>
