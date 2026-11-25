@@ -21,7 +21,7 @@ class PwaViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Service-Worker-Allowed"], "/")
-        self.assertContains(response, "pontual-shell-v7")
+        self.assertContains(response, "pontual-shell-v9")
 
 
 class FeatureShellTests(TestCase):
@@ -56,3 +56,29 @@ class FeatureShellTests(TestCase):
 
         self.assertContains(response, "lib.js")
         self.assertContains(response, "notificationclick")
+
+
+class PlanAndExamShellTests(TestCase):
+    def test_home_has_syllabus_exam_and_copy_dialogs(self):
+        response = self.client.get("/")
+
+        for dialog_id in ("syllabus-dialog", "exam-dialog", "copy-dialog"):
+            self.assertContains(response, f'id="{dialog_id}"')
+
+    def test_diary_dialog_has_topics_phrases_and_dictation_hooks(self):
+        response = self.client.get("/")
+
+        self.assertContains(response, 'id="diary-topics"')
+        self.assertContains(response, 'id="diary-phrases"')
+        self.assertContains(response, 'data-action="diary-copy-previous"')
+        self.assertContains(response, 'data-action="dictate"')
+
+    def test_plan_dialog_offers_national_holidays(self):
+        response = self.client.get("/")
+
+        self.assertContains(response, 'name="holidays"')
+
+    def test_service_worker_forwards_notification_clicks_to_the_app(self):
+        response = self.client.get("/service-worker.js")
+
+        self.assertContains(response, 'type: "navigate"')

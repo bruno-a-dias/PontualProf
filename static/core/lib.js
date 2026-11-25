@@ -283,8 +283,9 @@
    * Notifications for the remaining ponto windows of one day.
    * They fire `lead` minutes before each window opens (entry and exit).
    */
-  function reminderEvents(classes, now = new Date(), lead = 5) {
+  function reminderEvents(classes, now = new Date(), lead = 5, options = {}) {
     const events = [];
+    const at = (minute) => new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, minute, 0, 0);
     classes
       .filter((item) => Number(item.dayOfWeek) === now.getDay())
       .forEach((item) => {
@@ -292,15 +293,32 @@
           { phase: "Entrada", minute: timeToMinutes(item.startTime) - PONTO_WINDOW - lead, opens: timeToMinutes(item.startTime) - PONTO_WINDOW },
           { phase: "Saída", minute: timeToMinutes(item.endTime) - PONTO_WINDOW - lead, opens: timeToMinutes(item.endTime) - PONTO_WINDOW },
         ].forEach(({ phase, minute, opens }) => {
-          const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, minute, 0, 0);
-          if (at.getTime() <= now.getTime()) return;
+          const when = at(minute);
+          if (when.getTime() <= now.getTime()) return;
           events.push({
-            at,
+            at: when,
+            kind: "ponto",
+            page: "home",
             tag: `pontual-${item.id}-${phase}-${toISODate(now)}`,
             title: `Ponto de ${phase.toLowerCase()} em ${lead} min`,
             body: `${item.subject} · ${item.startTime}–${item.endTime} · janela abre às ${minutesToTime(opens)}`,
           });
         });
+        if (options.diary) {
+          const when = at(timeToMinutes(item.endTime) + 5);
+          if (when.getTime() > now.getTime()) {
+            events.push({
+              at: when,
+              kind: "diary",
+              page: "diary",
+              classId: item.id,
+              date: toISODate(now),
+              tag: `pontual-diary-${item.id}-${toISODate(now)}`,
+              title: "Aula terminou",
+              body: `${item.subject}: registre o conteúdo no diário`,
+            });
+          }
+        }
       });
     return events.sort((left, right) => left.at - right.at);
   }
@@ -325,12 +343,13 @@
    * Weekly recurring events with an alarm. Times are "floating" (local), so the calendar app
    * shows them at the same wall-clock hour wherever the teacher is.
    */
-  function buildICS({ classes, institutionName, startISO, endISO, lead = 15, now = new Date() }) {
+  function buildICS({ classes = [], assessments = [], institutionName = () => "", startISO, endISO, lead = 15, now = new Date() }) {
     const start = parseISODate(startISO);
     const end = parseISODate(endISO);
-    if (!start || !end || end < start) throw new Error("Informe um período válido para o calendário.");
+    if (classes.length && (!start || !end || end < start)) throw new Error("Informe um período válido para o calendário.");
     const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}Z`;
-    const until = `${end.getFullYear()}${pad(end.getMonth() + 1)}${pad(end.getDate())}T235959`;
+    const ymd = (date) => `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`;
+    const until = end ? `${ymd(end)}T235959` : "";
     const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Pontual//Grade docente//PT-BR", "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "X-WR-CALNAME:Pontual — Grade docente"];
     classes.forEach((item) => {
       const first = datesForWeekday(startISO, endISO, item.dayOfWeek)[0];
@@ -351,6 +370,28 @@
         "ACTION:DISPLAY",
         `DESCRIPTION:${icsEscape(`${item.subject} começa em ${lead} min — hora do ponto`)}`,
         `TRIGGER:-PT${Math.max(0, lead)}M`,
+        "END:VALARM",
+        "END:VEVENT",
+      );
+    });
+    assessments.forEach((item) => {
+      const date = parseISODate(item.date);
+      if (!date) return;
+      const timed = /^\d{2}:\d{2}$/.test(item.time || "");
+      lines.push("BEGIN:VEVENT", `UID:${item.id}@pontual.local`, `DTSTAMP:${stamp}`);
+      if (timed) {
+        const minutes = timeToMinutes(item.time);
+        lines.push(`DTSTART:${icsDateTime(date, minutes)}`, `DTEND:${icsDateTime(date, Math.min(minutes + 60, 1439))}`);
+      } else {
+        lines.push(`DTSTART;VALUE=DATE:${ymd(date)}`, `DTEND;VALUE=DATE:${ymd(addDays(date, 1))}`);
+      }
+      lines.push(
+        `SUMMARY:${icsEscape(`${item.type}: ${item.title} (${item.subject})`)}`,
+        `DESCRIPTION:${icsEscape(item.notes || "")}`,
+        "BEGIN:VALARM",
+        "ACTION:DISPLAY",
+        `DESCRIPTION:${icsEscape(`${item.type} amanhã: ${item.title}`)}`,
+        timed ? "TRIGGER:-P1D" : "TRIGGER:-PT6H",
         "END:VALARM",
         "END:VEVENT",
       );
@@ -450,6 +491,175 @@
     ]);
   }
 
+
+  // ---------------------------------------------------------------- Holidays (Brazil, national)
+
+  /** Meeus/Jones/Butcher algorithm for Easter Sunday. */
+  function easterSunday(year) {
+    const a = year % 19;
+    const b = Math.floor(year / 100);
+    const c = year % 100;
+    const d = Math.floor(b / 4);
+    const e = b % 4;
+    const f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4);
+    const k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7;
+    const m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const month = Math.floor((h + l - 7 * m + 114) / 31);
+    const day = ((h + l - 7 * m + 114) % 31) + 1;
+    return new Date(year, month - 1, day);
+  }
+
+  /** National holidays; `optional` marks "ponto facultativo" days that many schools still observe. */
+  function brazilHolidays(year) {
+    const fixed = [
+      ["01-01", "Confraternização Universal"], ["04-21", "Tiradentes"], ["05-01", "Dia do Trabalho"],
+      ["09-07", "Independência do Brasil"], ["10-12", "Nossa Senhora Aparecida"], ["11-02", "Finados"],
+      ["11-15", "Proclamação da República"], ["11-20", "Consciência Negra"], ["12-25", "Natal"],
+    ];
+    const easter = easterSunday(year);
+    const moving = (offset) => toISODate(addDays(easter, offset));
+    const list = fixed.map(([monthDay, name]) => ({ date: `${year}-${monthDay}`, name, optional: false }));
+    list.push(
+      { date: moving(-48), name: "Carnaval (segunda-feira)", optional: true },
+      { date: moving(-47), name: "Carnaval (terça-feira)", optional: true },
+      { date: moving(-2), name: "Sexta-feira Santa", optional: false },
+      { date: moving(60), name: "Corpus Christi", optional: true },
+    );
+    return list.sort((left, right) => left.date.localeCompare(right.date));
+  }
+
+  /** date → holiday, for every holiday inside [startISO, endISO]. */
+  function holidayMap(startISO, endISO) {
+    const map = {};
+    const start = parseISODate(startISO);
+    const end = parseISODate(endISO);
+    if (!start || !end) return map;
+    for (let year = start.getFullYear(); year <= end.getFullYear(); year += 1) {
+      brazilHolidays(year).forEach((holiday) => {
+        if (holiday.date >= startISO && holiday.date <= endISO) map[holiday.date] = holiday;
+      });
+    }
+    return map;
+  }
+
+  function daysBetween(fromISO, toISO) {
+    const from = parseISODate(fromISO);
+    const to = parseISODate(toISO);
+    if (!from || !to) return NaN;
+    return Math.round((Date.UTC(to.getFullYear(), to.getMonth(), to.getDate()) - Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())) / 86_400_000);
+  }
+
+  // ---------------------------------------------------------------- Teaching plan (syllabus)
+
+  /** One topic per line; strips bullets/numbering, collapses spaces and drops duplicates. */
+  function parseTopics(text) {
+    const seen = new Set();
+    const topics = [];
+    String(text || "").split(/\r?\n/).forEach((line) => {
+      const topic = line.replace(/^\s*(?:[-–•*]|\d+[.)\-:])\s*/, "").trim().replace(/\s+/g, " ");
+      const key = topic.toLocaleLowerCase("pt-BR");
+      if (!topic || seen.has(key)) return;
+      seen.add(key);
+      topics.push(topic.slice(0, 200));
+    });
+    return topics.slice(0, 200);
+  }
+
+  const byDate = (left, right) => left.date.localeCompare(right.date) || String(left.startTime || "").localeCompare(String(right.startTime || ""));
+
+  /** topic id → date of the first lesson (given or replacement) that covered it. */
+  function coveredTopics(entries) {
+    const map = new Map();
+    [...entries].sort(byDate).forEach((entry) => {
+      if (entry.status !== "Realizada" && entry.status !== "Reposição") return;
+      (entry.topicIds || []).forEach((id) => { if (!map.has(id)) map.set(id, entry.date); });
+    });
+    return map;
+  }
+
+  /** topic id → date of the first planned ("Prevista") lesson it was assigned to. */
+  function plannedTopics(entries) {
+    const map = new Map();
+    [...entries].sort(byDate).forEach((entry) => {
+      if (entry.status !== "Prevista") return;
+      (entry.topicIds || []).forEach((id) => { if (!map.has(id)) map.set(id, entry.date); });
+    });
+    return map;
+  }
+
+  function nextTopic(topics, entries) {
+    const covered = coveredTopics(entries);
+    return topics.find((topic) => !covered.has(topic.id)) || null;
+  }
+
+  function syllabusProgress(topics, entries) {
+    const covered = coveredTopics(entries);
+    const done = topics.filter((topic) => covered.has(topic.id)).length;
+    const counting = entries.filter((entry) => STATUS_COUNTS[entry.status]);
+    return {
+      total: topics.length,
+      covered: done,
+      percent: topics.length ? Math.round((done / topics.length) * 100) : 0,
+      lessonsGiven: counting.filter((entry) => entry.status !== "Prevista").length,
+      lessonsTotal: counting.length,
+    };
+  }
+
+  /** Assigns the not-yet-covered topics, in order, to planned lessons that have none. entryId → [topicId]. */
+  function distributeTopics(topics, entries) {
+    const covered = coveredTopics(entries);
+    const assigned = new Set();
+    entries.forEach((entry) => (entry.topicIds || []).forEach((id) => assigned.add(id)));
+    const free = topics.filter((topic) => !covered.has(topic.id) && !assigned.has(topic.id));
+    const targets = entries.filter((entry) => entry.status === "Prevista" && !(entry.topicIds || []).length).sort(byDate);
+    const result = {};
+    targets.forEach((entry, index) => { if (free[index]) result[entry.id] = [free[index].id]; });
+    return result;
+  }
+
+  // ---------------------------------------------------------------- Assessments
+
+  const EXAM_TYPES = ["Prova", "Trabalho", "Entrega", "Seminário", "Outro"];
+
+  const byDateTime = (left, right) => left.date.localeCompare(right.date) || String(left.time || "").localeCompare(String(right.time || ""));
+
+  function upcomingAssessments(items, now = new Date(), days = 14) {
+    const today = toISODate(now);
+    return items
+      .filter((item) => !item.done && item.date >= today && daysBetween(today, item.date) <= days)
+      .sort(byDateTime);
+  }
+
+  function assessmentRows(items) {
+    return [
+      ["Disciplina", "Tipo", "Título", "Data", "Hora", "Peso", "Média da turma", "Situação", "Observações"],
+      ...[...items].sort(byDateTime).map((item) => [
+        item.subject, item.type, item.title, formatBR(item.date), item.time || "", item.weight || "", item.average || "",
+        item.done ? "Concluída" : "Pendente", item.notes || "",
+      ]),
+    ];
+  }
+
+  /** Reminders the evening before (18:00) and the morning of (07:00) each pending assessment. */
+  function assessmentEvents(items, now = new Date()) {
+    const events = [];
+    items.filter((item) => !item.done).forEach((item) => {
+      const day = parseISODate(item.date);
+      if (!day) return;
+      const label = `${item.type}: ${item.title} · ${item.subject}${item.time ? ` às ${item.time}` : ""}`;
+      const eve = new Date(day.getFullYear(), day.getMonth(), day.getDate() - 1, 18, 0, 0);
+      const morning = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 7, 0, 0);
+      const base = { kind: "exam", page: "diary", tab: "exams", body: label };
+      if (eve > now) events.push({ ...base, at: eve, tag: `pontual-exam-${item.id}-eve`, title: "Avaliação amanhã" });
+      if (morning > now) events.push({ ...base, at: morning, tag: `pontual-exam-${item.id}-day`, title: "Avaliação hoje" });
+    });
+    return events.sort((left, right) => left.at - right.at);
+  }
+
   return {
     DAY_NAMES, DAY_SHORT, SHIFT_NAMES, DIARY_STATUSES, PONTO_WINDOW,
     timeToMinutes, minutesToTime, toISODate, parseISODate, formatBR, addDays,
@@ -459,5 +669,8 @@
     durationMinutes, suggestedPeriods, detectConflicts, formatDuration, weeklyWorkload,
     missingPonto, countdownText, reminderEvents,
     buildICS, parseClassSheet, classSheetTemplate,
+    easterSunday, brazilHolidays, holidayMap, daysBetween,
+    parseTopics, coveredTopics, plannedTopics, nextTopic, syllabusProgress, distributeTopics,
+    EXAM_TYPES, upcomingAssessments, assessmentRows, assessmentEvents,
   };
 });

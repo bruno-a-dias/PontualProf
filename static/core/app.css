@@ -887,3 +887,66 @@ input[type="file"] { padding: 7px; }
   .diary-table .col-actions { padding-top: 4px; }
   .week-grid { min-width: 680px; }
 }
+
+/* =====================================================================
+   Plano de ensino, avaliações, frases, ditado, copiar para turmas
+   ===================================================================== */
+[hidden] { display: none !important; }
+
+.tab-segmented { display: flex; width: 100%; }
+.tab-segmented button { flex: 1; padding: 0 8px; }
+
+.field { display: grid; gap: 6px; }
+.field-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.field-tools { display: inline-flex; align-items: center; gap: 6px; }
+.icon-button.mic { border-color: var(--line); }
+.icon-button.mic.is-listening { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--danger) 18%, transparent); } }
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-row:empty { display: none; }
+.chip { min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); color: var(--text); cursor: pointer; font-size: 12px; font-weight: 650; }
+.chip:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); color: var(--primary); }
+
+.topic-picker { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; }
+.topic-picker legend { padding: 0 6px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.topic-picker > div { display: grid; gap: 8px; max-height: 190px; overflow-y: auto; }
+.topic-check, .topic-picker .check-row { align-items: flex-start; color: var(--text); font-size: 13px; line-height: 1.4; }
+.topic-check input, .topic-picker .check-row input { flex: 0 0 auto; margin-top: 2px; }
+.diary-table small.topics { display: block; margin-top: 4px; color: var(--muted); }
+
+.progress { height: 10px; overflow: hidden; border-radius: 999px; background: var(--surface-soft); }
+.progress > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--primary), var(--accent)); transition: width 300ms ease; }
+.plan-card { display: grid; gap: 14px; }
+.plan-summary h2 { font-size: 21px; }
+.topic-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.topic-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-soft); }
+.topic-row > div { min-width: 0; flex: 1; }
+.topic-row strong { display: block; font-size: 14px; overflow-wrap: anywhere; }
+.topic-row small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+.topic-index { display: grid; width: 26px; height: 26px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: var(--surface); color: var(--muted); font-size: 12px; font-weight: 800; }
+.topic-row.is-done { opacity: 0.75; }
+.topic-row.is-done .topic-index { background: var(--success); color: #fff; }
+.topic-row.is-next { border-color: var(--primary); background: var(--primary-soft); }
+.topic-row.is-next .topic-index { background: var(--primary); color: #fff; }
+
+.exam-card { display: grid; gap: 12px; }
+.exam-row { align-items: center; }
+.exam-row.is-done .data-row-copy strong { color: var(--muted); text-decoration: line-through; }
+.exam-check { width: 22px; min-height: 22px; flex: 0 0 auto; margin: 0; accent-color: var(--primary); }
+.exam-row .tag { flex: 0 0 auto; }
+
+@media (max-width: 719px) {
+  .exam-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "check copy edit" ". tag tag"; align-items: start; gap: 6px 12px; }
+  .exam-row .exam-check { grid-area: check; margin-top: 3px; }
+  .exam-row .data-row-copy { grid-area: copy; }
+  .exam-row .tag { grid-area: tag; justify-self: start; }
+  .exam-row .icon-button { grid-area: edit; }
+}
+@media (pointer: coarse) {
+  .exam-check { width: 26px; min-height: 26px; }
+  .chip { min-height: 40px; font-size: 13px; }
+}
+@media print {
+  .diary-table small.topics { display: none; }
+}

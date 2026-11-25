@@ -24,12 +24,23 @@
   let pendingInstitutionLogo = "";
   let toastTimer;
   let scheduleView = "list";
+  let diaryTab = "diary";
   let diaryTurma = "";
   let diaryFilter = "all";
   let storagePersisted = null;
   let conflictMap = {};
 
-  const defaultSettings = () => ({ remindersEnabled: false, reminderLead: 5, backupReminderDays: 30, lastBackupAt: "" });
+  const DEFAULT_PHRASES = [
+    "Revisão do conteúdo anterior",
+    "Exercícios em sala",
+    "Correção de atividade",
+    "Aplicação de prova",
+    "Aula prática em laboratório",
+    "Seminário e apresentações",
+  ];
+  const defaultSettings = () => ({
+    remindersEnabled: false, reminderLead: 5, backupReminderDays: 30, lastBackupAt: "", diaryReminder: true, phrases: [...DEFAULT_PHRASES],
+  });
 
   const emptySnapshot = () => ({
     activeSemester: "2027/1",
@@ -40,6 +51,8 @@
     classes: [],
     pontoLogs: [],
     diary: [],
+    syllabus: [],
+    assessments: [],
     settings: defaultSettings(),
   });
 
@@ -118,14 +131,24 @@
       item && typeof item === "object" && validString(item.id) && validString(item.semester) &&
       validString(item.institutionId) && validString(item.subject) && Boolean(L.parseISODate(item.date)) &&
       L.DIARY_STATUSES.some((status) => status.value === item.status) &&
-      validString(item.content ?? "") && validString(item.notes ?? "");
+      validString(item.content ?? "") && validString(item.notes ?? "") &&
+      (item.topicIds === undefined || (Array.isArray(item.topicIds) && item.topicIds.every(validString)));
+    const validSyllabus = (item) =>
+      item && typeof item === "object" && validString(item.id) && validString(item.semester) &&
+      validString(item.institutionId) && validString(item.subject) && validString(item.text);
+    const validAssessment = (item) =>
+      item && typeof item === "object" && validString(item.id) && validString(item.semester) &&
+      validString(item.institutionId) && validString(item.subject) && validString(item.title) &&
+      L.EXAM_TYPES.includes(item.type) && Boolean(L.parseISODate(item.date));
     if (
       !value.semesters.every(validString) ||
       !value.institutions.every(validInstitution) ||
       !value.pontoRules.every(validRule) ||
       !value.classes.every(validClass) ||
       !value.pontoLogs.every(validLog) ||
-      !(value.diary ?? []).every(validDiary)
+      !(value.diary ?? []).every(validDiary) ||
+      !(value.syllabus ?? []).every(validSyllabus) ||
+      !(value.assessments ?? []).every(validAssessment)
     ) {
       throw new Error("O backup está incompleto ou contém registros inválidos.");
     }
@@ -144,7 +167,12 @@
       diary: L.renumberAll((value.diary ?? []).map((item) => ({
         classId: "", startTime: "", periods: 1, ...item,
         content: item.content ?? "", notes: item.notes ?? "", periods: Math.min(8, Math.max(1, Number(item.periods) || 1)),
+        topicIds: Array.isArray(item.topicIds) ? item.topicIds.filter((topic) => typeof topic === "string") : [],
       }))),
+      syllabus: (value.syllabus ?? []).map((item, index) => ({ order: index, ...item })),
+      assessments: (value.assessments ?? []).map((item) => ({
+        time: "", weight: "", average: "", notes: "", ...item, done: item.done === true,
+      })),
       settings: {
         ...defaultSettings(),
         ...(value.settings && typeof value.settings === "object" ? {
@@ -152,6 +180,10 @@
           reminderLead: [5, 10, 15].includes(Number(value.settings.reminderLead)) ? Number(value.settings.reminderLead) : 5,
           backupReminderDays: Number(value.settings.backupReminderDays) > 0 ? Number(value.settings.backupReminderDays) : 30,
           lastBackupAt: typeof value.settings.lastBackupAt === "string" ? value.settings.lastBackupAt : "",
+          diaryReminder: value.settings.diaryReminder !== false,
+          phrases: Array.isArray(value.settings.phrases)
+            ? value.settings.phrases.filter((phrase) => typeof phrase === "string" && phrase.trim()).slice(0, 20)
+            : [...DEFAULT_PHRASES],
         } : {}),
       },
     };
@@ -491,6 +523,7 @@
 
         ${renderAppearance()}
         ${renderReminderSettings()}
+        ${renderPhrasesSettings()}
         <section class="card settings-section">
           <div><span class="eyebrow">PERÍODO LETIVO</span><h2>Semestres</h2><p class="card-description">O novo período pode iniciar com uma cópia da grade ativa.</p></div>
           <div class="class-tags">${state.semesters.map((semester) => `<button type="button" class="tag ${semester === state.activeSemester ? "is-accent" : ""}" data-action="activate-semester" data-semester="${escapeHTML(semester)}">${escapeHTML(semester)}${semester === state.activeSemester ? " · ativo" : ""}</button>`).join("")}</div>
@@ -527,6 +560,7 @@
         <section class="card settings-section">
           <div><span class="eyebrow">BACKUP PORTÁTIL</span><h2>Exportar ou importar</h2><p class="card-description">O arquivo é lido e gravado localmente; não há envio ao servidor.</p></div>
           <button type="button" class="button button-primary button-wide" data-action="export-backup">⇩ Exportar backup JSON</button>
+          ${canShareFiles() ? `<button type="button" class="button button-secondary button-wide" data-action="share-backup">↗ Compartilhar backup (WhatsApp, Drive…)</button>` : ""}
           <button type="button" class="button button-secondary button-wide" data-action="import-backup">＋ Importar backup JSON</button>
           <div class="notice"><strong>Atenção:</strong> importar substitui os dados deste navegador. Faça um backup antes de trocar o conteúdo.</div>
         </section>
@@ -652,16 +686,21 @@
     const weekday = L.DAY_SHORT[L.parseISODate(entry.date)?.getDay() ?? 0];
     const tone = skipped ? "" : entry.status === "Reposição" ? "is-accent" : pending ? "is-danger" : "";
     const empty = (text) => `<span class="muted">${text}</span>`;
+    const topicNames = (entry.topicIds || []).map((id) => state.syllabus.find((topic) => topic.id === id)?.text).filter(Boolean);
+    const content = entry.content.trim()
+      ? `${escapeHTML(entry.content)}${topicNames.length ? `<small class="topics">Plano: ${escapeHTML(topicNames.join("; "))}</small>` : ""}`
+      : topicNames.length && !skipped ? empty(`Previsto: ${escapeHTML(topicNames.join("; "))}`) : empty(skipped ? "—" : "Preencher…");
     return `
       <tr class="${pending ? "is-pending" : ""} ${skipped ? "is-skipped" : ""}">
         <td data-label="Aula nº" class="col-number">${escapeHTML(L.lessonLabel(entry))}</td>
         <td data-label="Data" class="col-date">${escapeHTML(L.formatBR(entry.date))} <small>${escapeHTML(weekday)}</small></td>
-        <td data-label="Conteúdo ministrado" class="col-content">${entry.content.trim() ? escapeHTML(entry.content) : empty(skipped ? "—" : "Preencher…")}</td>
+        <td data-label="Conteúdo ministrado" class="col-content">${content}</td>
         <td data-label="Observações" class="col-notes ${entry.notes.trim() ? "" : "is-empty"}">${entry.notes.trim() ? escapeHTML(entry.notes) : empty("—")}</td>
         <td data-label="Situação" class="col-status"><span class="tag ${tone}">${escapeHTML(entry.status)}</span></td>
         <td class="col-actions no-print"><div class="row-actions">
           <button type="button" class="icon-button" data-action="edit-diary" data-id="${escapeHTML(entry.id)}" aria-label="Editar aula de ${escapeHTML(L.formatBR(entry.date))}">✎</button>
           <button type="button" class="icon-button" data-action="copy-field" data-field="content" data-id="${escapeHTML(entry.id)}" aria-label="Copiar conteúdo de ${escapeHTML(L.formatBR(entry.date))}" title="Copiar conteúdo">⧉</button>
+          <button type="button" class="icon-button" data-action="copy-entry" data-id="${escapeHTML(entry.id)}" aria-label="Copiar conteúdo de ${escapeHTML(L.formatBR(entry.date))} para outras turmas" title="Copiar para outras turmas">⇉</button>
         </div></td>
       </tr>`;
   }
@@ -675,57 +714,17 @@
     if (!turmas.some((turma) => turma.key === diaryTurma)) diaryTurma = turmas[0].key;
     const turma = turmas.find((item) => item.key === diaryTurma);
     const entries = diaryEntriesFor(diaryTurma);
-    const pendingCount = entries.filter(isPending).length;
-    const shown = diaryFilter === "pending" ? entries.filter(isPending) : entries;
-    const gaps = todayDiaryGaps();
-    const profile = state.userProfile;
-    const gapsCard = gaps.length ? `
-      <section class="card alert-card is-primary no-print">
-        <span class="eyebrow">HOJE</span><h2>Aulas de hoje sem registro</h2>
-        <div class="item-list">${gaps.map((item) => `
-          <div class="data-row"><div class="data-row-copy"><strong>${escapeHTML(item.subject)}</strong><small>${escapeHTML(item.startTime)}–${escapeHTML(item.endTime)} · ${escapeHTML(institutionName(item.institutionId))}</small></div>
-          <button type="button" class="button button-primary button-small" data-action="add-diary" data-class-id="${escapeHTML(item.id)}" data-date="${todayISO()}">Registrar</button></div>`).join("")}</div>
-      </section>` : "";
-    const table = shown.length ? `
-      <div class="diary-table-wrap"><table class="diary-table">
-        <thead><tr><th>Aula nº</th><th>Data</th><th>Conteúdo ministrado</th><th>Observações</th><th>Situação</th><th class="no-print"><span class="sr-only">Ações</span></th></tr></thead>
-        <tbody>${shown.map(renderDiaryRow).join("")}</tbody>
-      </table></div>`
-      : renderEmpty(
-        diaryFilter === "pending" ? "Nada pendente" : "Nenhuma aula registrada ainda",
-        diaryFilter === "pending" ? "Todas as aulas até hoje já têm conteúdo." : "Registre a aula de hoje ou gere as datas previstas do semestre para ir preenchendo.",
-        diaryFilter === "pending" ? "" : `<button type="button" class="button button-primary" data-action="add-diary">Registrar aula</button>`,
-      );
-    return `
-      <div class="page-stack page-diary">
-        ${heading}
-        ${gapsCard}
-        <section class="card diary-card">
-          <div class="print-only print-header">
-            <h2>Diário de classe — ${escapeHTML(turma.subject)}</h2>
-            <p>${escapeHTML(institutionName(turma.institutionId))} · Semestre ${escapeHTML(state.activeSemester)}${profile.name ? ` · Prof. ${escapeHTML(profile.name)}` : ""}</p>
-          </div>
-          <div class="diary-toolbar no-print">
-            <label>Disciplina / turma
-              <select data-diary-select aria-label="Disciplina">${turmas.map((item) => `<option value="${escapeHTML(item.key)}" ${item.key === diaryTurma ? "selected" : ""}>${escapeHTML(item.subject)} · ${escapeHTML(institutionName(item.institutionId))}</option>`).join("")}</select>
-            </label>
-            <div class="segmented" role="group" aria-label="Filtro">
-              <button type="button" data-action="set-diary-filter" data-filter="all" aria-pressed="${diaryFilter === "all"}">Todas (${entries.length})</button>
-              <button type="button" data-action="set-diary-filter" data-filter="pending" aria-pressed="${diaryFilter === "pending"}">Pendentes (${pendingCount})</button>
-            </div>
-          </div>
-          <div class="diary-actions no-print">
-            <button type="button" class="button button-primary button-small" data-action="add-diary">＋ Registrar aula</button>
-            <button type="button" class="button button-secondary button-small" data-action="plan-diary">Gerar datas do semestre</button>
-            <button type="button" class="button button-quiet button-small" data-action="copy-diary">Copiar tabela</button>
-            <button type="button" class="button button-quiet button-small" data-action="export-diary">Baixar CSV</button>
-            <button type="button" class="button button-quiet button-small" data-action="print-diary">Imprimir / PDF</button>
-            <button type="button" class="button button-quiet button-small" data-action="export-diary-all">CSV de todas as disciplinas</button>
-          </div>
-          ${table}
-          <p class="card-description no-print">O número da aula é calculado pela ordem das datas (aula dupla vira “3–4”; faltas e feriados não consomem número). <strong>Copiar tabela</strong> cola direto no Excel/Planilhas; o botão ⧉ de cada linha copia só o conteúdo, para colar no campo do sistema da instituição.</p>
-        </section>
+    const upcoming = L.upcomingAssessments(state.assessments.filter((item) => item.semester === state.activeSemester), new Date(), 14).length;
+    const tabs = `
+      <div class="segmented tab-segmented no-print" role="group" aria-label="Seções do diário">
+        <button type="button" data-action="diary-tab" data-tab="diary" aria-pressed="${diaryTab === "diary"}">Diário</button>
+        <button type="button" data-action="diary-tab" data-tab="plan" aria-pressed="${diaryTab === "plan"}">Plano de ensino</button>
+        <button type="button" data-action="diary-tab" data-tab="exams" aria-pressed="${diaryTab === "exams"}">Avaliações${upcoming ? ` (${upcoming})` : ""}</button>
       </div>`;
+    const body = diaryTab === "plan" ? renderPlanTab(turma, turmas, entries)
+      : diaryTab === "exams" ? renderExamsTab(turma, turmas)
+        : renderDiaryTab(turma, turmas, entries);
+    return `<div class="page-stack page-diary">${heading}${tabs}${body}</div>`;
   }
 
   function diaryStatusOptions(selected) {
@@ -756,6 +755,7 @@
     const key = existing ? L.diaryKey(existing) : item ? L.diaryKey(item) : diaryTurma;
     const turma = turmas.find((entry) => entry.key === key) || turmas[0];
     diaryEditingId = existing?.id || "";
+    diaryAutoContent = "";
     diaryForm.reset();
     const select = diaryForm.elements.namedItem("turma");
     select.innerHTML = turmas.map((entry) => `<option value="${escapeHTML(entry.key)}">${escapeHTML(entry.subject)} · ${escapeHTML(institutionName(entry.institutionId))}</option>`).join("");
@@ -766,10 +766,17 @@
     diaryForm.elements.namedItem("periods").value = existing?.periods || periodsFor(turma, chosenDate);
     diaryForm.elements.namedItem("content").value = existing?.content || "";
     diaryForm.elements.namedItem("notes").value = existing?.notes || "";
+    const nextTopic = existing ? null : L.nextTopic(topicsFor(turma.key), diaryEntriesFor(turma.key));
+    const chosenTopics = existing ? (existing.topicIds || []) : nextTopic ? [nextTopic.id] : [];
+    renderDiaryTopics(turma.key, chosenTopics);
+    renderDiaryPhrases();
+    if (!diaryForm.elements.namedItem("content").value.trim() && chosenTopics.length) syncContentWithTopics();
+    diaryDialog.querySelectorAll('[data-action="dictate"]').forEach((button) => { button.hidden = !dictationSupported(); });
     document.getElementById("diary-dialog-title").textContent = existing ? "Editar aula" : "Registrar aula";
     document.getElementById("delete-diary").hidden = !existing;
     diaryDialog.showModal();
-    diaryForm.elements.namedItem("content").focus();
+    diaryForm.querySelector("#diary-topic-list input:checked")?.closest("label")?.scrollIntoView({ block: "nearest" });
+    diaryForm.elements.namedItem("content").focus({ preventScroll: true });
   }
 
   function saveDiary() {
@@ -796,6 +803,7 @@
       status: String(data.get("status")),
       content: String(data.get("content") || "").trim(),
       notes: String(data.get("notes") || "").trim(),
+      topicIds: data.getAll("topicIds").map(String),
     };
     if (state.diary.some((other) => other.id !== id && L.diaryKey(other) === turma.key && other.date === date && (other.startTime || "") === entry.startTime)) {
       showToast("Já existe um registro desta aula nesta data. Edite o existente.");
@@ -839,14 +847,18 @@
     const end = String(data.get("end"));
     const turma = turmaList().find((entry) => entry.key === diaryTurma);
     if (!turma) return;
+    const holidays = planForm.elements.namedItem("holidays").checked ? L.holidayMap(start, end) : {};
     const created = [];
+    let marked = 0;
     turma.classes.forEach((item) => {
       L.datesForWeekday(start, end, item.dayOfWeek).forEach((date) => {
         if (findDiaryEntry(item, date)) return;
+        const holiday = holidays[date];
+        if (holiday) marked += 1;
         created.push({
           id: makeId("diary"), classId: item.id, semester: state.activeSemester, institutionId: item.institutionId,
           subject: item.subject, date, startTime: item.startTime, periods: L.suggestedPeriods(item),
-          status: "Prevista", content: "", notes: "",
+          status: holiday ? "Sem aula (feriado/recesso)" : "Prevista", content: "", notes: holiday ? holiday.name : "", topicIds: [],
         });
       });
     });
@@ -861,7 +873,7 @@
     changeState((next) => {
       next.diary.push(...created);
       next.diary = L.renumberAll(next.diary);
-    }, `${created.length} aulas previstas criadas. Marque feriados como “Sem aula”.`);
+    }, `${created.length} aulas criadas${marked ? `, ${marked} em feriado nacional marcada${marked === 1 ? "" : "s"} como “Sem aula”` : ""}. Confira feriados estaduais e municipais.`);
     planDialog.close();
   }
 
@@ -999,7 +1011,10 @@
   let reminderTimers = [];
 
   async function showReminder(event) {
-    const options = { body: event.body, tag: event.tag, icon: "/static/core/icon.svg", badge: "/static/core/icon.svg", data: { url: "/" } };
+    const options = {
+      body: event.body, tag: event.tag, icon: "/static/core/icon.svg", badge: "/static/core/icon.svg",
+      data: { page: event.page || "home", tab: event.tab || "" },
+    };
     try {
       const registration = await navigator.serviceWorker?.ready;
       if (registration) {
@@ -1015,17 +1030,28 @@
     reminderTimers = [];
     if (!state?.settings.remindersEnabled || !("Notification" in window) || Notification.permission !== "granted") return;
     const now = new Date();
-    const events = L.reminderEvents(sortedClasses(), now, state.settings.reminderLead);
-    events.forEach((event) => reminderTimers.push(window.setTimeout(() => showReminder(event), event.at - now)));
     const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+    const events = [
+      ...L.reminderEvents(sortedClasses(), now, state.settings.reminderLead, { diary: state.settings.diaryReminder }),
+      ...L.assessmentEvents(state.assessments, now),
+    ].filter((event) => event.at < midnight).sort((left, right) => left.at - right.at);
+    events.forEach((event) => reminderTimers.push(window.setTimeout(() => {
+      if (event.kind === "diary") {
+        // The teacher may already have filled the diary in the meantime.
+        const item = state.classes.find((entry) => entry.id === event.classId);
+        const entry = item && findDiaryEntry(item, event.date);
+        if (entry && entry.content.trim()) return;
+      }
+      showReminder(event);
+    }, event.at - now)));
     reminderTimers.push(window.setTimeout(scheduleReminders, midnight - now));
-    // Chrome (Android) can fire these even with the app closed; elsewhere the timers above apply.
+    // Chrome (Android) may fire these even with the app closed; elsewhere the timers above apply.
     if ("showTrigger" in Notification.prototype && window.TimestampTrigger && "serviceWorker" in navigator) {
       try {
         const registration = await navigator.serviceWorker.ready;
-        for (const event of events) {
+        for (const event of events.filter((entry) => entry.kind !== "diary")) {
           await registration.showNotification(event.title, {
-            body: event.body, tag: event.tag, icon: "/static/core/icon.svg", data: { url: "/" },
+            body: event.body, tag: event.tag, icon: "/static/core/icon.svg", data: { page: event.page, tab: event.tab || "" },
             showTrigger: new window.TimestampTrigger(event.at.getTime()),
           });
         }
@@ -1080,11 +1106,12 @@
     return `
       <section class="card settings-section">
         <div><span class="eyebrow">NÃO PERCA O PONTO</span><h2>Lembretes e calendário</h2>
-          <p class="card-description">Receba um aviso antes de cada janela de ponto (entrada e saída).</p></div>
+          <p class="card-description">Receba um aviso antes de cada janela de ponto (entrada e saída), ao fim da aula e na véspera das avaliações.</p></div>
         <div class="data-row"><div class="data-row-copy"><strong>Notificações: ${escapeHTML(status)}</strong><small>Funcionam com o app aberto ou em segundo plano (no iPhone, instalado na tela inicial). Não são garantidas com o app fechado: para isso use o calendário abaixo.</small></div>
           <button type="button" class="button ${state.settings.remindersEnabled ? "button-quiet" : "button-primary"} button-small" data-action="toggle-reminders" ${permission === "denied" || !supported ? "disabled" : ""}>${state.settings.remindersEnabled ? "Desativar" : "Ativar"}</button></div>
         <label>Avisar antes da janela abrir
           <select data-setting="reminderLead">${[5, 10, 15].map((minutes) => `<option value="${minutes}" ${state.settings.reminderLead === minutes ? "selected" : ""}>${minutes} minutos</option>`).join("")}</select></label>
+        <label class="check-row"><input type="checkbox" data-setting="diaryReminder" ${state.settings.diaryReminder ? "checked" : ""}> Avisar ao fim da aula para registrar o diário</label>
         <hr class="section-divider">
         <form id="ics-form" class="form-stack" onsubmit="return false">
           <div><h3>Exportar para a agenda do celular</h3>
@@ -1155,12 +1182,22 @@
           <div class="alert-actions">${gaps.slice(0, 3).map((item) => `<button type="button" class="button button-primary button-small" data-action="add-diary" data-class-id="${escapeHTML(item.id)}" data-date="${todayISO()}">${escapeHTML(item.subject)}</button>`).join("")}</div>
         </section>`);
     }
+    const exams = L.upcomingAssessments(state.assessments.filter((item) => item.semester === state.activeSemester), now, 7);
+    if (exams.length) {
+      cards.push(`
+        <section class="card alert-card is-info">
+          <span class="eyebrow">AVALIAÇÕES</span><h2>${exams.length === 1 ? "1 avaliação" : `${exams.length} avaliações`} nos próximos 7 dias</h2>
+          <div class="item-list">${exams.slice(0, 3).map((item) => `
+            <div class="data-row"><div class="data-row-copy"><strong>${escapeHTML(item.type)}: ${escapeHTML(item.title)}</strong><small>${escapeHTML(item.subject)} · ${escapeHTML(L.formatBR(item.date))} · ${escapeHTML(relativeDay(item.date))}</small></div></div>`).join("")}</div>
+          <div class="alert-actions"><button type="button" class="button button-quiet button-small" data-action="open-exams">Ver avaliações</button></div>
+        </section>`);
+    }
     if (needsBackup()) {
       cards.push(`
         <section class="card alert-card is-warning">
           <span class="eyebrow">BACKUP</span><h2>Seus dados só existem neste aparelho</h2>
           <p class="card-description">Último backup: ${escapeHTML(backupText())}. Exporte um arquivo para não perder grade e diário.</p>
-          <div class="alert-actions"><button type="button" class="button button-primary button-small" data-action="export-backup">Fazer backup agora</button></div>
+          <div class="alert-actions"><button type="button" class="button button-primary button-small" data-action="export-backup">Fazer backup agora</button>${canShareFiles() ? `<button type="button" class="button button-quiet button-small" data-action="share-backup">Compartilhar</button>` : ""}</div>
         </section>`);
     }
     const html = cards.filter(Boolean).join("");
@@ -1266,23 +1303,45 @@
     const { id } = button.dataset;
     switch (action) {
       case "go-page": setPage(button.dataset.target, true); return true;
+      case "open-exams": diaryTab = "exams"; setPage("diary"); return true;
+      case "diary-tab": diaryTab = button.dataset.tab; render(); return true;
       case "set-diary-filter": diaryFilter = button.dataset.filter; render(); return true;
       case "add-diary": openDiaryDialog({ classId: button.dataset.classId, date: button.dataset.date }); return true;
       case "edit-diary": openDiaryDialog({ id }); return true;
       case "close-diary": diaryDialog.close(); return true;
       case "save-diary": saveDiary(); return true;
       case "delete-diary": deleteDiary(); return true;
+      case "diary-copy-previous": copyPreviousLesson(); return true;
+      case "insert-phrase": insertPhrase(Number(button.dataset.index)); return true;
+      case "dictate": toggleDictation(button.dataset.target, button); return true;
       case "plan-diary": openPlanDialog(); return true;
       case "close-plan": planDialog.close(); return true;
       case "save-plan": savePlan(); return true;
       case "copy-diary": copyDiary(); return true;
       case "copy-field": copyDiaryField(id, button.dataset.field); return true;
+      case "copy-entry": openCopyDialog(id); return true;
+      case "close-copy": copyDialog.close(); return true;
+      case "save-copy": saveCopy(); return true;
       case "export-diary": exportDiary(); return true;
       case "export-diary-all": exportDiaryAll(); return true;
       case "print-diary": printDiary(); return true;
+      case "edit-syllabus": openSyllabusDialog(); return true;
+      case "close-syllabus": syllabusDialog.close(); return true;
+      case "save-syllabus": saveSyllabus(); return true;
+      case "distribute-topics": distributeTopicsAction(); return true;
+      case "add-exam": openExamDialog(); return true;
+      case "edit-exam": openExamDialog({ id }); return true;
+      case "close-exam": examDialog.close(); return true;
+      case "save-exam": saveExam(); return true;
+      case "delete-exam": deleteExam(); return true;
+      case "toggle-exam": toggleExam(id); return true;
+      case "export-exams": exportExams(); return true;
+      case "export-exams-ics": exportExamsICS(); return true;
       case "schedule-view": scheduleView = button.dataset.view; render(); return true;
       case "toggle-reminders": toggleReminders(); return true;
       case "export-ics": exportICS(); return true;
+      case "save-phrases": savePhrases(); return true;
+      case "share-backup": shareBackup(); return true;
       case "confirm-ponto": setPontoConfirmation(id, button.dataset.value === "true"); return true;
       case "manual-ponto": addManualPonto(button.dataset.classId, button.dataset.phase); return true;
       case "export-logs": exportLogs(); return true;
@@ -1306,17 +1365,553 @@
       changeState((next) => { next.settings.reminderLead = Number(target.value) || 5; }, "Antecedência atualizada.");
       return true;
     }
+    if (target.dataset?.setting === "diaryReminder") {
+      changeState((next) => { next.settings.diaryReminder = target.checked; }, target.checked ? "Aviso de diário ativado." : "Aviso de diário desativado.");
+      return true;
+    }
     if (target.id === "sheet-file" && target.files?.[0]) {
       importSheet(target.files[0])
         .catch((error) => showToast(`Não foi possível importar: ${error.message}`))
         .finally(() => { target.value = ""; });
       return true;
     }
-    if (target.form === diaryForm && ["date", "turma"].includes(target.name) && !diaryEditingId) {
-      autofillDiaryPeriods();
+    if (target.form === diaryForm && target.name === "topicIds") {
+      syncContentWithTopics();
+      return true;
+    }
+    if (target.form === diaryForm && ["date", "turma"].includes(target.name)) {
+      if (!diaryEditingId) autofillDiaryPeriods();
+      if (target.name === "turma") {
+        const key = target.value;
+        const next = diaryEditingId ? null : L.nextTopic(topicsFor(key), diaryEntriesFor(key));
+        renderDiaryTopics(key, next ? [next.id] : []);
+        syncContentWithTopics();
+      }
       return true;
     }
     return false;
+  }
+
+  // ====================================================================================
+  // Plano de ensino, avaliações, copiar para turmas, ditado, frases, compartilhar backup
+  // ====================================================================================
+  const examDialog = document.getElementById("exam-dialog");
+  const examForm = document.getElementById("exam-form");
+  const syllabusDialog = document.getElementById("syllabus-dialog");
+  const syllabusForm = document.getElementById("syllabus-form");
+  const copyDialog = document.getElementById("copy-dialog");
+  const copyForm = document.getElementById("copy-form");
+  let examEditingId = "";
+  let copyingEntryId = "";
+  let diaryAutoContent = "";
+  let recognition = null;
+
+  const weekdayOf = (iso) => L.DAY_SHORT[L.parseISODate(iso)?.getDay() ?? 0];
+
+  function relativeDay(iso) {
+    const diff = L.daysBetween(todayISO(), iso);
+    if (diff === 0) return "hoje";
+    if (diff === 1) return "amanhã";
+    if (diff === -1) return "ontem";
+    return diff > 1 ? `em ${diff} dias` : `há ${-diff} dias`;
+  }
+
+  function topicsFor(key) {
+    return state.syllabus.filter((topic) => L.diaryKey(topic) === key).sort((left, right) => left.order - right.order);
+  }
+
+  function turmaSelectMarkup(turmas) {
+    return `<label>Disciplina / turma
+      <select data-diary-select aria-label="Disciplina">${turmas.map((item) => `<option value="${escapeHTML(item.key)}" ${item.key === diaryTurma ? "selected" : ""}>${escapeHTML(item.subject)} · ${escapeHTML(institutionName(item.institutionId))}</option>`).join("")}</select>
+    </label>`;
+  }
+
+  // ------------------------------------------------------------------ Plano de ensino
+
+  function renderPlanTab(turma, turmas, entries) {
+    const topics = topicsFor(turma.key);
+    const toolbar = `<div class="diary-toolbar no-print">${turmaSelectMarkup(turmas)}</div>`;
+    if (!topics.length) {
+      return `
+        <section class="card plan-card">
+          ${toolbar}
+          ${renderEmpty("Nenhum tópico no plano de ensino", "Cole a ementa (um tópico por linha). O diário passa a sugerir o próximo tópico e mostra quanto do plano já foi dado.", `<button type="button" class="button button-primary" data-action="edit-syllabus">Cadastrar plano de ensino</button>`)}
+        </section>`;
+    }
+    const covered = L.coveredTopics(entries);
+    const planned = L.plannedTopics(entries);
+    const progress = L.syllabusProgress(topics, entries);
+    const next = L.nextTopic(topics, entries);
+    const rows = topics.map((topic, index) => {
+      const done = covered.has(topic.id);
+      const status = done ? `✓ Dado em ${L.formatBR(covered.get(topic.id))}`
+        : planned.has(topic.id) ? `Previsto para ${L.formatBR(planned.get(topic.id))}` : "Pendente";
+      return `<li class="topic-row ${done ? "is-done" : ""} ${next?.id === topic.id ? "is-next" : ""}">
+        <span class="topic-index">${index + 1}</span>
+        <div><strong>${escapeHTML(topic.text)}</strong><small>${escapeHTML(status)}</small></div>
+        ${next?.id === topic.id ? `<span class="tag is-accent">Próximo</span>` : ""}</li>`;
+    }).join("");
+    return `
+      <section class="card plan-card">
+        ${toolbar}
+        <div class="plan-summary">
+          <div><span class="eyebrow">PREVISTO × REALIZADO</span>
+            <h2>${progress.covered} de ${progress.total} tópicos dados <small class="muted">(${progress.percent}%)</small></h2>
+            ${progress.lessonsTotal ? `<p class="card-description">${progress.lessonsGiven} de ${progress.lessonsTotal} aulas já realizadas neste semestre.</p>` : ""}</div>
+        </div>
+        <div class="progress" role="progressbar" aria-label="Tópicos dados" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.percent}"><span style="width:${progress.percent}%"></span></div>
+        ${next ? `<div class="notice"><strong>Próximo tópico:</strong> ${escapeHTML(next.text)}</div>` : `<div class="notice"><strong>Plano concluído.</strong> Todos os tópicos já foram dados.</div>`}
+        <div class="diary-actions no-print">
+          <button type="button" class="button button-secondary button-small" data-action="edit-syllabus">Editar plano</button>
+          <button type="button" class="button button-quiet button-small" data-action="distribute-topics">Distribuir nas aulas previstas</button>
+        </div>
+        <ol class="topic-list">${rows}</ol>
+        <p class="card-description no-print">Um tópico conta como <strong>dado</strong> quando uma aula <strong>Realizada</strong> ou <strong>Reposição</strong> do diário o inclui. “Distribuir” coloca um tópico em cada aula <strong>Prevista</strong> sem tópico, na ordem do plano.</p>
+      </section>`;
+  }
+
+  function openSyllabusDialog() {
+    const turma = selectedTurma();
+    if (!turma) return;
+    syllabusForm.elements.namedItem("topics").value = topicsFor(turma.key).map((topic) => topic.text).join("\n");
+    document.getElementById("syllabus-turma").textContent = `${turma.subject} · ${institutionName(turma.institutionId)}`;
+    syllabusDialog.showModal();
+    syllabusForm.elements.namedItem("topics").focus();
+  }
+
+  function saveSyllabus() {
+    const turma = selectedTurma();
+    if (!turma) return;
+    const lines = L.parseTopics(syllabusForm.elements.namedItem("topics").value);
+    changeState((next) => {
+      const byText = new Map(next.syllabus.filter((topic) => L.diaryKey(topic) === turma.key)
+        .map((topic) => [topic.text.toLocaleLowerCase("pt-BR"), topic]));
+      const kept = lines.map((text, order) => ({
+        id: byText.get(text.toLocaleLowerCase("pt-BR"))?.id || makeId("topic"),
+        semester: state.activeSemester, institutionId: turma.institutionId, subject: turma.subject, order, text,
+      }));
+      next.syllabus = [...next.syllabus.filter((topic) => L.diaryKey(topic) !== turma.key), ...kept];
+      const alive = new Set(kept.map((topic) => topic.id));
+      next.diary = next.diary.map((entry) => (L.diaryKey(entry) === turma.key && entry.topicIds?.length
+        ? { ...entry, topicIds: entry.topicIds.filter((id) => alive.has(id)) } : entry));
+    }, lines.length ? `Plano salvo com ${lines.length} tópico${lines.length === 1 ? "" : "s"}.` : "Plano de ensino removido.");
+    syllabusDialog.close();
+  }
+
+  function distributeTopicsAction() {
+    const turma = selectedTurma();
+    if (!turma) return;
+    const assignment = L.distributeTopics(topicsFor(turma.key), diaryEntriesFor(turma.key));
+    const count = Object.keys(assignment).length;
+    if (!count) {
+      showToast("Não há aulas previstas sem tópico (ou todos os tópicos já foram usados). Gere as datas do semestre primeiro.");
+      return;
+    }
+    changeState((next) => {
+      next.diary = next.diary.map((entry) => (assignment[entry.id] ? { ...entry, topicIds: assignment[entry.id] } : entry));
+    }, `${count} aula${count === 1 ? "" : "s"} prevista${count === 1 ? "" : "s"} ${count === 1 ? "recebeu" : "receberam"} um tópico.`);
+  }
+
+  // ------------------------------------------------------------------ Avaliações
+
+  const examsForTurma = (key) => state.assessments
+    .filter((item) => item.semester === state.activeSemester && L.diaryKey(item) === key)
+    .sort((left, right) => left.date.localeCompare(right.date) || (left.time || "").localeCompare(right.time || ""));
+
+  function renderExamRow(item, showSubject = false) {
+    const diff = L.daysBetween(todayISO(), item.date);
+    const tone = item.done ? "" : diff < 0 ? "is-danger" : diff <= 3 ? "is-accent" : "";
+    const meta = [
+      `${L.formatBR(item.date)} ${weekdayOf(item.date)}`,
+      item.time,
+      showSubject ? item.subject : "",
+      item.weight ? `peso ${item.weight}` : "",
+      item.average ? `média ${item.average}` : "",
+    ].filter(Boolean).join(" · ");
+    return `
+      <div class="data-row exam-row ${item.done ? "is-done" : ""}">
+        <input type="checkbox" class="exam-check" data-action="toggle-exam" data-id="${escapeHTML(item.id)}" ${item.done ? "checked" : ""} aria-label="Concluída: ${escapeHTML(item.title)}">
+        <div class="data-row-copy"><strong>${escapeHTML(item.type)}: ${escapeHTML(item.title)}</strong><small>${escapeHTML(meta)}</small></div>
+        <span class="tag ${tone}">${item.done ? "Concluída" : escapeHTML(relativeDay(item.date))}</span>
+        <button type="button" class="icon-button" data-action="edit-exam" data-id="${escapeHTML(item.id)}" aria-label="Editar ${escapeHTML(item.title)}">✎</button>
+      </div>`;
+  }
+
+  function renderExamsTab(turma, turmas) {
+    const semesterItems = state.assessments.filter((item) => item.semester === state.activeSemester);
+    const upcoming = L.upcomingAssessments(semesterItems, new Date(), 21);
+    const own = examsForTurma(turma.key);
+    return `
+      <section class="card exam-card">
+        <div class="card-heading"><div><span class="eyebrow">AGENDA DE AVALIAÇÕES</span><h2>Próximos 21 dias</h2></div></div>
+        ${upcoming.length ? `<div class="item-list">${upcoming.map((item) => renderExamRow(item, true)).join("")}</div>`
+          : renderEmpty("Nenhuma avaliação próxima", "Cadastre provas, trabalhos e entregas para receber lembretes.")}
+      </section>
+      <section class="card exam-card">
+        <div class="diary-toolbar no-print">${turmaSelectMarkup(turmas)}</div>
+        <div class="diary-actions no-print">
+          <button type="button" class="button button-primary button-small" data-action="add-exam">＋ Avaliação</button>
+          <button type="button" class="button button-quiet button-small" data-action="export-exams">Baixar CSV</button>
+          <button type="button" class="button button-quiet button-small" data-action="export-exams-ics">Exportar para a agenda (.ics)</button>
+        </div>
+        ${own.length ? `<div class="item-list">${own.map((item) => renderExamRow(item)).join("")}</div>`
+          : renderEmpty("Sem avaliações nesta disciplina", "Toque em “＋ Avaliação” para cadastrar a primeira.")}
+        <p class="card-description no-print">Você recebe um lembrete na véspera (18h) e na manhã do dia (7h) se as notificações estiverem ativas em Ajustes. O .ics leva as datas para a agenda do celular.</p>
+      </section>`;
+  }
+
+  function openExamDialog({ id = "" } = {}) {
+    const turmas = turmaList();
+    if (!turmas.length) {
+      showToast("Cadastre uma aula na grade antes de criar avaliações.");
+      return;
+    }
+    const existing = state.assessments.find((item) => item.id === id);
+    const key = existing ? L.diaryKey(existing) : diaryTurma;
+    examEditingId = existing?.id || "";
+    examForm.reset();
+    const select = examForm.elements.namedItem("turma");
+    select.innerHTML = turmas.map((turma) => `<option value="${escapeHTML(turma.key)}">${escapeHTML(turma.subject)} · ${escapeHTML(institutionName(turma.institutionId))}</option>`).join("");
+    select.value = turmas.some((turma) => turma.key === key) ? key : turmas[0].key;
+    examForm.elements.namedItem("type").innerHTML = L.EXAM_TYPES.map((type) => `<option ${type === (existing?.type || "Prova") ? "selected" : ""}>${type}</option>`).join("");
+    examForm.elements.namedItem("title").value = existing?.title || "";
+    examForm.elements.namedItem("date").value = existing?.date || "";
+    examForm.elements.namedItem("time").value = existing?.time || "";
+    examForm.elements.namedItem("weight").value = existing?.weight || "";
+    examForm.elements.namedItem("average").value = existing?.average || "";
+    examForm.elements.namedItem("notes").value = existing?.notes || "";
+    examForm.elements.namedItem("done").checked = Boolean(existing?.done);
+    document.getElementById("exam-dialog-title").textContent = existing ? "Editar avaliação" : "Nova avaliação";
+    document.getElementById("delete-exam").hidden = !existing;
+    examDialog.showModal();
+    examForm.elements.namedItem("title").focus();
+  }
+
+  function saveExam() {
+    if (!examForm.reportValidity()) return;
+    const data = new FormData(examForm);
+    const turma = turmaList().find((entry) => entry.key === String(data.get("turma")));
+    const date = String(data.get("date") || "");
+    if (!turma || !L.parseISODate(date)) {
+      showToast("Escolha a disciplina e uma data válida.");
+      return;
+    }
+    const id = examEditingId || makeId("exam");
+    const item = {
+      id, semester: state.activeSemester, institutionId: turma.institutionId, subject: turma.subject,
+      type: String(data.get("type")), title: String(data.get("title") || "").trim(), date,
+      time: String(data.get("time") || ""), weight: String(data.get("weight") || "").trim(),
+      average: String(data.get("average") || "").trim(), notes: String(data.get("notes") || "").trim(),
+      done: data.get("done") === "on",
+    };
+    changeState((next) => {
+      const index = next.assessments.findIndex((entry) => entry.id === id);
+      if (index >= 0) next.assessments[index] = item;
+      else next.assessments.push(item);
+    }, "Avaliação salva neste dispositivo.");
+    diaryTurma = turma.key;
+    examDialog.close();
+  }
+
+  function deleteExam() {
+    if (!examEditingId || !window.confirm("Excluir esta avaliação?")) return;
+    const id = examEditingId;
+    changeState((next) => { next.assessments = next.assessments.filter((entry) => entry.id !== id); }, "Avaliação removida.");
+    examDialog.close();
+  }
+
+  function toggleExam(id) {
+    changeState((next) => {
+      const item = next.assessments.find((entry) => entry.id === id);
+      if (item) item.done = !item.done;
+    }, "");
+  }
+
+  function exportExams() {
+    const items = state.assessments.filter((item) => item.semester === state.activeSemester);
+    if (!items.length) {
+      showToast("Ainda não há avaliações neste semestre.");
+      return;
+    }
+    downloadText(`avaliacoes_${slug(state.activeSemester)}.csv`, L.toCSV(L.assessmentRows(items)));
+    showToast("CSV de avaliações gerado.");
+  }
+
+  function exportExamsICS() {
+    const items = state.assessments.filter((item) => item.semester === state.activeSemester && !item.done);
+    if (!items.length) {
+      showToast("Não há avaliações pendentes para exportar.");
+      return;
+    }
+    downloadText(`pontual_avaliacoes_${slug(state.activeSemester)}.ics`, L.buildICS({ assessments: items }), "text/calendar;charset=utf-8");
+    showToast("Calendário de avaliações gerado. Abra o arquivo para adicionar à agenda.");
+  }
+
+  // ------------------------------------------------------------------ Diário: tópicos, frases, aula anterior, ditado
+
+  function selectedTopicIds() {
+    return [...diaryForm.querySelectorAll('input[name="topicIds"]:checked')].map((input) => input.value);
+  }
+
+  function renderDiaryTopics(key, selected) {
+    const wrap = document.getElementById("diary-topics");
+    const list = document.getElementById("diary-topic-list");
+    const topics = topicsFor(key);
+    wrap.hidden = !topics.length;
+    if (!topics.length) {
+      list.innerHTML = "";
+      return;
+    }
+    const others = diaryEntriesFor(key).filter((entry) => entry.id !== diaryEditingId);
+    const covered = L.coveredTopics(others);
+    list.innerHTML = topics.map((topic) => `
+      <label class="check-row topic-check"><input type="checkbox" name="topicIds" value="${escapeHTML(topic.id)}" ${selected.includes(topic.id) ? "checked" : ""}>
+        <span>${escapeHTML(topic.text)}${covered.has(topic.id) ? ` <small class="muted">(já dado em ${escapeHTML(L.formatBR(covered.get(topic.id)))})</small>` : ""}</span></label>`).join("");
+  }
+
+  /** Keeps the content field in sync with the chosen topics while the teacher has not typed over it. */
+  function syncContentWithTopics() {
+    const field = diaryForm.elements.namedItem("content");
+    const texts = topicsFor(diaryForm.elements.namedItem("turma").value)
+      .filter((topic) => selectedTopicIds().includes(topic.id)).map((topic) => topic.text);
+    if (!field.value.trim() || field.value === diaryAutoContent) {
+      diaryAutoContent = texts.join("; ");
+      field.value = diaryAutoContent;
+    }
+  }
+
+  function renderDiaryPhrases() {
+    document.getElementById("diary-phrases").innerHTML = state.settings.phrases
+      .map((phrase, index) => `<button type="button" class="chip" data-action="insert-phrase" data-index="${index}">${escapeHTML(phrase)}</button>`).join("");
+  }
+
+  function insertPhrase(index) {
+    const phrase = state.settings.phrases[index];
+    const field = diaryForm.elements.namedItem("content");
+    if (!phrase) return;
+    const current = field.value.trim();
+    field.value = current ? `${current}${/[.;:!?]$/.test(current) ? " " : "; "}${phrase}` : phrase;
+    field.focus();
+  }
+
+  function copyPreviousLesson() {
+    const key = diaryForm.elements.namedItem("turma").value;
+    const date = diaryForm.elements.namedItem("date").value;
+    const previous = diaryEntriesFor(key)
+      .filter((entry) => entry.id !== diaryEditingId && entry.date < date && entry.content.trim())
+      .sort((left, right) => right.date.localeCompare(left.date))[0];
+    if (!previous) {
+      showToast("Não há aula anterior com conteúdo para copiar.");
+      return;
+    }
+    diaryForm.elements.namedItem("content").value = previous.content;
+    if (!diaryForm.elements.namedItem("notes").value.trim()) diaryForm.elements.namedItem("notes").value = previous.notes || "";
+    diaryAutoContent = "";
+    showToast(`Copiado da aula de ${L.formatBR(previous.date)}.`);
+  }
+
+  function savePhrases() {
+    const form = document.getElementById("phrases-form");
+    const phrases = [...new Set(String(new FormData(form).get("phrases") || "").split(/\r?\n/)
+      .map((line) => line.trim().replace(/\s+/g, " ").slice(0, 120)).filter(Boolean))].slice(0, 20);
+    changeState((next) => { next.settings.phrases = phrases; }, phrases.length ? "Frases salvas." : "Frases removidas.");
+  }
+
+  function renderPhrasesSettings() {
+    return `
+      <section class="card settings-section">
+        <div><span class="eyebrow">DIÁRIO</span><h2>Frases frequentes</h2>
+          <p class="card-description">Atalhos que aparecem ao registrar uma aula. Uma frase por linha (até 20).</p></div>
+        <form id="phrases-form" class="form-stack" onsubmit="return false">
+          <label>Frases<textarea name="phrases" rows="6" maxlength="3000">${escapeHTML(state.settings.phrases.join("\n"))}</textarea></label>
+          <button type="button" class="button button-secondary" data-action="save-phrases">Salvar frases</button>
+        </form>
+      </section>`;
+  }
+
+  const dictationSupported = () => Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+  function stopDictation() {
+    if (recognition) {
+      try { recognition.stop(); } catch { /* already stopped */ }
+    }
+  }
+
+  function toggleDictation(fieldName, button) {
+    if (recognition) {
+      stopDictation();
+      return;
+    }
+    let consented = false;
+    try { consented = localStorage.getItem("pontual-dictation-ok") === "1"; } catch { consented = false; }
+    if (!consented) {
+      if (!window.confirm("O ditado usa o reconhecimento de voz do seu navegador, que pode enviar o áudio a servidores do fabricante (Google, Apple…). Nada é enviado ao Pontual. Deseja continuar?")) return;
+      try { localStorage.setItem("pontual-dictation-ok", "1"); } catch { /* ignore */ }
+    }
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const field = diaryForm.elements.namedItem(fieldName);
+    const instance = new Recognition();
+    instance.lang = "pt-BR";
+    instance.continuous = true;
+    instance.interimResults = false;
+    instance.onresult = (event) => {
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        if (!event.results[index].isFinal) continue;
+        const text = event.results[index][0].transcript.trim();
+        if (!text) continue;
+        const current = field.value.trim();
+        field.value = current ? `${current} ${text}` : text.charAt(0).toUpperCase() + text.slice(1);
+        diaryAutoContent = "";
+      }
+    };
+    instance.onerror = (event) => {
+      showToast(event.error === "not-allowed" || event.error === "service-not-allowed"
+        ? "Permita o uso do microfone para ditar." : `Não foi possível ouvir (${event.error}).`);
+    };
+    instance.onend = () => {
+      recognition = null;
+      document.querySelectorAll('[data-action="dictate"]').forEach((item) => { item.classList.remove("is-listening"); item.setAttribute("aria-pressed", "false"); });
+    };
+    recognition = instance;
+    button.classList.add("is-listening");
+    button.setAttribute("aria-pressed", "true");
+    try { instance.start(); } catch (error) { recognition = null; showToast(error.message); }
+  }
+
+  // ------------------------------------------------------------------ Copiar para outras turmas
+
+  function openCopyDialog(id) {
+    const entry = state.diary.find((item) => item.id === id);
+    if (!entry) return;
+    if (!entry.content.trim()) {
+      showToast("Esta aula ainda não tem conteúdo para copiar.");
+      return;
+    }
+    const targets = turmaList().filter((turma) => turma.key !== L.diaryKey(entry));
+    if (!targets.length) {
+      showToast("Cadastre outra disciplina ou turma na grade para copiar o conteúdo.");
+      return;
+    }
+    copyingEntryId = id;
+    document.getElementById("copy-summary").textContent = `${L.formatBR(entry.date)} · ${entry.content.length > 140 ? `${entry.content.slice(0, 140)}…` : entry.content}`;
+    document.getElementById("copy-targets").innerHTML = targets.map((turma) => `
+      <label class="check-row"><input type="checkbox" name="targets" value="${escapeHTML(turma.key)}"><span>${escapeHTML(turma.subject)} · ${escapeHTML(institutionName(turma.institutionId))}</span></label>`).join("");
+    copyForm.elements.namedItem("replace").checked = false;
+    copyDialog.showModal();
+  }
+
+  function saveCopy() {
+    const source = state.diary.find((item) => item.id === copyingEntryId);
+    const keys = [...copyForm.querySelectorAll('input[name="targets"]:checked')].map((input) => input.value);
+    if (!source || !keys.length) {
+      showToast("Marque ao menos uma turma de destino.");
+      return;
+    }
+    const replace = copyForm.elements.namedItem("replace").checked;
+    const result = { created: 0, updated: 0, skipped: 0 };
+    changeState((next) => {
+      keys.forEach((key) => {
+        const turma = turmaList().find((item) => item.key === key);
+        if (!turma) return;
+        const match = next.diary.find((entry) => L.diaryKey(entry) === key && entry.date === source.date);
+        if (match) {
+          if (match.content.trim() && !replace) { result.skipped += 1; return; }
+          match.content = source.content;
+          if (source.notes) match.notes = source.notes;
+          if (match.status === "Prevista") match.status = source.status === "Prevista" ? "Realizada" : source.status;
+          result.updated += 1;
+          return;
+        }
+        const weekday = L.parseISODate(source.date)?.getDay();
+        const item = turma.classes.find((entry) => Number(entry.dayOfWeek) === weekday);
+        next.diary.push({
+          id: makeId("diary"), classId: item?.id || "", semester: state.activeSemester, institutionId: turma.institutionId,
+          subject: turma.subject, date: source.date, startTime: item?.startTime || "", periods: source.periods,
+          status: source.status === "Prevista" ? "Realizada" : source.status, content: source.content, notes: source.notes || "", topicIds: [],
+        });
+        result.created += 1;
+      });
+      next.diary = L.renumberAll(next.diary);
+    }, "");
+    copyDialog.close();
+    const parts = [];
+    if (result.created) parts.push(`${result.created} criada${result.created === 1 ? "" : "s"}`);
+    if (result.updated) parts.push(`${result.updated} atualizada${result.updated === 1 ? "" : "s"}`);
+    if (result.skipped) parts.push(`${result.skipped} ignorada${result.skipped === 1 ? "" : "s"} (já tinham conteúdo)`);
+    showToast(`Conteúdo copiado: ${parts.join(", ") || "nada a fazer"}.`);
+  }
+
+  // ------------------------------------------------------------------ Compartilhar backup
+
+  const canShareFiles = () => {
+    try {
+      return Boolean(navigator.canShare && navigator.canShare({ files: [new File(["{}"], "pontual.json", { type: "application/json" })] }));
+    } catch {
+      return false;
+    }
+  };
+
+  async function shareBackup() {
+    const stamped = { ...state, settings: { ...state.settings, lastBackupAt: new Date().toISOString() } };
+    const file = new File([JSON.stringify(stamped, null, 2)], `pontual_backup_${slug(state.activeSemester)}.json`, { type: "application/json" });
+    try {
+      await navigator.share({ files: [file], title: "Backup do Pontual" });
+      state = stamped;
+      await persistState();
+      render();
+      showToast("Backup compartilhado. Guarde o arquivo em um lugar seguro.");
+    } catch (error) {
+      if (error.name !== "AbortError") showToast(`Não foi possível compartilhar: ${error.message}`);
+    }
+  }
+
+  function renderDiaryTab(turma, turmas, entries) {
+    const pendingCount = entries.filter(isPending).length;
+    const shown = diaryFilter === "pending" ? entries.filter(isPending) : entries;
+    const gaps = todayDiaryGaps();
+    const profile = state.userProfile;
+    const gapsCard = gaps.length ? `
+      <section class="card alert-card is-primary no-print">
+        <span class="eyebrow">HOJE</span><h2>Aulas de hoje sem registro</h2>
+        <div class="item-list">${gaps.map((item) => `
+          <div class="data-row"><div class="data-row-copy"><strong>${escapeHTML(item.subject)}</strong><small>${escapeHTML(item.startTime)}–${escapeHTML(item.endTime)} · ${escapeHTML(institutionName(item.institutionId))}</small></div>
+          <button type="button" class="button button-primary button-small" data-action="add-diary" data-class-id="${escapeHTML(item.id)}" data-date="${todayISO()}">Registrar</button></div>`).join("")}</div>
+      </section>` : "";
+    const table = shown.length ? `
+      <div class="diary-table-wrap"><table class="diary-table">
+        <thead><tr><th>Aula nº</th><th>Data</th><th>Conteúdo ministrado</th><th>Observações</th><th>Situação</th><th class="no-print"><span class="sr-only">Ações</span></th></tr></thead>
+        <tbody>${shown.map(renderDiaryRow).join("")}</tbody>
+      </table></div>`
+      : renderEmpty(
+        diaryFilter === "pending" ? "Nada pendente" : "Nenhuma aula registrada ainda",
+        diaryFilter === "pending" ? "Todas as aulas até hoje já têm conteúdo." : "Registre a aula de hoje ou gere as datas previstas do semestre para ir preenchendo.",
+        diaryFilter === "pending" ? "" : `<button type="button" class="button button-primary" data-action="add-diary">Registrar aula</button>`,
+      );
+    return `
+      ${gapsCard}
+      <section class="card diary-card">
+        <div class="print-only print-header">
+          <h2>Diário de classe — ${escapeHTML(turma.subject)}</h2>
+          <p>${escapeHTML(institutionName(turma.institutionId))} · Semestre ${escapeHTML(state.activeSemester)}${profile.name ? ` · Prof. ${escapeHTML(profile.name)}` : ""}</p>
+        </div>
+        <div class="diary-toolbar no-print">
+          ${turmaSelectMarkup(turmas)}
+          <div class="segmented" role="group" aria-label="Filtro">
+            <button type="button" data-action="set-diary-filter" data-filter="all" aria-pressed="${diaryFilter === "all"}">Todas (${entries.length})</button>
+            <button type="button" data-action="set-diary-filter" data-filter="pending" aria-pressed="${diaryFilter === "pending"}">Pendentes (${pendingCount})</button>
+          </div>
+        </div>
+        <div class="diary-actions no-print">
+          <button type="button" class="button button-primary button-small" data-action="add-diary">＋ Registrar aula</button>
+          <button type="button" class="button button-secondary button-small" data-action="plan-diary">Gerar datas do semestre</button>
+          <button type="button" class="button button-quiet button-small" data-action="copy-diary">Copiar tabela</button>
+          <button type="button" class="button button-quiet button-small" data-action="export-diary">Baixar CSV</button>
+          <button type="button" class="button button-quiet button-small" data-action="print-diary">Imprimir / PDF</button>
+          <button type="button" class="button button-quiet button-small" data-action="export-diary-all">CSV de todas as disciplinas</button>
+        </div>
+        ${table}
+        <p class="card-description no-print">O número da aula é calculado pela ordem das datas (aula dupla vira “3–4”; faltas e feriados não consomem número). <strong>Copiar tabela</strong> cola direto no Excel/Planilhas; <strong>⧉</strong> copia só o conteúdo da linha; <strong>⇉</strong> copia o conteúdo para outras turmas.</p>
+      </section>`;
   }
 
   function render() {
@@ -1431,8 +2026,11 @@
       else next.classes.push(item);
       if (previous && (previous.subject !== item.subject || previous.institutionId !== item.institutionId) &&
         !next.classes.some((entry) => entry.id !== id && L.diaryKey(entry) === L.diaryKey(previous))) {
-        next.diary = L.renumberAll(next.diary.map((entry) => (L.diaryKey(entry) === L.diaryKey(previous)
-          ? { ...entry, subject: item.subject, institutionId: item.institutionId } : entry)));
+        const rename = (entry) => (L.diaryKey(entry) === L.diaryKey(previous)
+          ? { ...entry, subject: item.subject, institutionId: item.institutionId } : entry);
+        next.diary = L.renumberAll(next.diary.map(rename));
+        next.syllabus = next.syllabus.map(rename);
+        next.assessments = next.assessments.map(rename);
       }
     }, clashNames.length ? `Aula salva, mas conflita com: ${clashNames.join(", ")}.` : "Aula salva na grade deste dispositivo.");
     dialog.close();
@@ -1714,7 +2312,9 @@
         await persistState();
       }
     }
-    const requestedPage = new URLSearchParams(window.location.search).get("page");
+    const params = new URLSearchParams(window.location.search);
+    const requestedPage = params.get("page");
+    if (["diary", "plan", "exams"].includes(params.get("tab"))) diaryTab = params.get("tab");
     if (requestedPage) setPage(requestedPage);
     else render();
     scheduleReminders();
@@ -1731,6 +2331,14 @@
     }, 60_000);
   }
 
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type !== "navigate" || !state) return;
+      if (["diary", "plan", "exams"].includes(event.data.tab)) diaryTab = event.data.tab;
+      setPage(event.data.page || "home");
+    });
+  }
+  diaryDialog.addEventListener("close", stopDictation);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible" || !state) return;
     scheduleReminders();

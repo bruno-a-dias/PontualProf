@@ -1,10 +1,10 @@
-const CACHE_NAME = "pontual-shell-v7";
+const CACHE_NAME = "pontual-shell-v9";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
-  "/static/core/app.css?v=7",
-  "/static/core/lib.js?v=7",
-  "/static/core/app.js?v=7",
+  "/static/core/app.css?v=9",
+  "/static/core/lib.js?v=9",
+  "/static/core/app.js?v=9",
   "/static/core/icon.svg",
 ];
 
@@ -25,11 +25,16 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = (event.notification.data && event.notification.data.url) || "/";
+  const data = event.notification.data || {};
+  const page = data.page || "home";
+  const tab = data.tab || "";
+  const target = `/?page=${encodeURIComponent(page)}${tab ? `&tab=${encodeURIComponent(tab)}` : ""}`;
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
       const open = clients.find((client) => "focus" in client);
-      return open ? open.focus() : self.clients.openWindow(target);
+      if (!open) return self.clients.openWindow(target);
+      open.postMessage({ type: "navigate", page, tab });
+      return open.focus();
     })
   );
 });

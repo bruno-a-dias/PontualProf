@@ -9,7 +9,7 @@
     <link rel="manifest" href="{% url 'manifest' %}">
     <link rel="icon" href="{% static 'core/icon.svg' %}" type="image/svg+xml">
     <link rel="apple-touch-icon" href="{% static 'core/icon.svg' %}">
-    <link rel="stylesheet" href="{% static 'core/app.css' %}?v=7">
+    <link rel="stylesheet" href="{% static 'core/app.css' %}?v=9">
     <title>Pontual — Grade & Ponto</title>
   </head>
   <body>
@@ -97,8 +97,30 @@
           <label>Aulas no dia<input name="periods" type="number" min="1" max="8" step="1" value="1" required inputmode="numeric"></label>
         </div>
         <label>Situação<select name="status"></select></label>
-        <label>Conteúdo ministrado<textarea name="content" rows="5" maxlength="4000" placeholder="Ex.: Limites e continuidade — exercícios 1 a 8"></textarea></label>
-        <label>Observações<textarea name="notes" rows="2" maxlength="1000" placeholder="Opcional: prova marcada, material, pendências…"></textarea></label>
+        <fieldset id="diary-topics" class="topic-picker" hidden>
+          <legend>Tópicos do plano de ensino</legend>
+          <div id="diary-topic-list"></div>
+        </fieldset>
+        <div class="field">
+          <div class="field-head">
+            <label for="diary-content">Conteúdo ministrado</label>
+            <span class="field-tools">
+              <button type="button" class="button button-quiet button-small" data-action="diary-copy-previous">Copiar da aula anterior</button>
+              <button type="button" class="icon-button mic" data-action="dictate" data-target="content" aria-pressed="false" aria-label="Ditar o conteúdo por voz" title="Ditar por voz" hidden>🎙</button>
+            </span>
+          </div>
+          <textarea id="diary-content" name="content" rows="5" maxlength="4000" placeholder="Ex.: Limites e continuidade — exercícios 1 a 8"></textarea>
+          <div id="diary-phrases" class="chip-row" aria-label="Frases frequentes"></div>
+        </div>
+        <div class="field">
+          <div class="field-head">
+            <label for="diary-notes">Observações</label>
+            <span class="field-tools">
+              <button type="button" class="icon-button mic" data-action="dictate" data-target="notes" aria-pressed="false" aria-label="Ditar as observações por voz" title="Ditar por voz" hidden>🎙</button>
+            </span>
+          </div>
+          <textarea id="diary-notes" name="notes" rows="2" maxlength="1000" placeholder="Opcional: prova marcada, material, pendências…"></textarea>
+        </div>
         <div class="dialog-actions">
           <button type="button" id="delete-diary" class="button button-quiet push-left" data-action="delete-diary" hidden>Excluir</button>
           <button type="button" class="button button-quiet" data-action="close-diary">Cancelar</button>
@@ -122,9 +144,81 @@
           <label>Primeiro dia<input name="start" type="date" required></label>
           <label>Último dia<input name="end" type="date" required></label>
         </div>
+        <label class="check-row"><input type="checkbox" name="holidays" checked> Marcar feriados nacionais como “Sem aula”</label>
+        <p class="card-description">Inclui Carnaval e Corpus Christi (ponto facultativo) e a Sexta-feira Santa. Feriados estaduais, municipais e recessos da instituição não estão incluídos: marque-os depois.</p>
         <div class="dialog-actions">
           <button type="button" class="button button-quiet" data-action="close-plan">Cancelar</button>
           <button type="button" class="button button-primary" data-action="save-plan">Gerar datas</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="syllabus-dialog" class="class-dialog" aria-labelledby="syllabus-dialog-title">
+      <form id="syllabus-form" class="dialog-form" onsubmit="return false">
+        <div class="dialog-heading">
+          <div>
+            <span class="eyebrow">PLANO DE ENSINO</span>
+            <h2 id="syllabus-dialog-title">Tópicos da disciplina</h2>
+          </div>
+          <button type="button" class="icon-button" data-action="close-syllabus" aria-label="Fechar">×</button>
+        </div>
+        <p class="card-description" id="syllabus-turma"></p>
+        <label>Um tópico por linha (cole a ementa)<textarea name="topics" rows="12" maxlength="20000" placeholder="1. Limites e continuidade&#10;2. Derivadas&#10;3. Integrais"></textarea></label>
+        <p class="card-description">Numeração e marcadores (1., -, •) são removidos. Se você editar o texto de um tópico, ele é tratado como um tópico novo.</p>
+        <div class="dialog-actions">
+          <button type="button" class="button button-quiet" data-action="close-syllabus">Cancelar</button>
+          <button type="button" class="button button-primary" data-action="save-syllabus">Salvar plano</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="exam-dialog" class="class-dialog" aria-labelledby="exam-dialog-title">
+      <form id="exam-form" class="dialog-form" onsubmit="return false">
+        <div class="dialog-heading">
+          <div>
+            <span class="eyebrow">AVALIAÇÕES</span>
+            <h2 id="exam-dialog-title">Nova avaliação</h2>
+          </div>
+          <button type="button" class="icon-button" data-action="close-exam" aria-label="Fechar">×</button>
+        </div>
+        <label>Disciplina / turma<select name="turma" required></select></label>
+        <div class="form-grid">
+          <label>Tipo<select name="type"></select></label>
+          <label>Título<input name="title" required maxlength="120" placeholder="Ex.: P1 — Limites"></label>
+          <label>Data<input name="date" type="date" required></label>
+          <label>Hora (opcional)<input name="time" type="time"></label>
+          <label>Peso (opcional)<input name="weight" maxlength="12" placeholder="Ex.: 30% ou 3,0"></label>
+          <label>Média da turma (opcional)<input name="average" maxlength="12" placeholder="Ex.: 6,8"></label>
+        </div>
+        <label>Observações<textarea name="notes" rows="2" maxlength="1000" placeholder="Conteúdo cobrado, material permitido…"></textarea></label>
+        <label class="check-row"><input type="checkbox" name="done"> Já realizada / entregue</label>
+        <div class="dialog-actions">
+          <button type="button" id="delete-exam" class="button button-quiet push-left" data-action="delete-exam" hidden>Excluir</button>
+          <button type="button" class="button button-quiet" data-action="close-exam">Cancelar</button>
+          <button type="button" class="button button-primary" data-action="save-exam">Salvar</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="copy-dialog" class="class-dialog" aria-labelledby="copy-dialog-title">
+      <form id="copy-form" class="dialog-form" onsubmit="return false">
+        <div class="dialog-heading">
+          <div>
+            <span class="eyebrow">LIVRO DIÁRIO</span>
+            <h2 id="copy-dialog-title">Copiar para outras turmas</h2>
+          </div>
+          <button type="button" class="icon-button" data-action="close-copy" aria-label="Fechar">×</button>
+        </div>
+        <p class="card-description" id="copy-summary"></p>
+        <fieldset class="topic-picker">
+          <legend>Turmas de destino</legend>
+          <div id="copy-targets"></div>
+        </fieldset>
+        <label class="check-row"><input type="checkbox" name="replace"> Substituir conteúdo já preenchido nessa data</label>
+        <p class="card-description">Se a turma de destino já tem uma aula nessa data, o conteúdo é colocado nela; se não tem, uma aula nova é criada.</p>
+        <div class="dialog-actions">
+          <button type="button" class="button button-quiet" data-action="close-copy">Cancelar</button>
+          <button type="button" class="button button-primary" data-action="save-copy">Copiar</button>
         </div>
       </form>
     </dialog>
@@ -134,7 +228,7 @@
     <input id="backup-file" class="sr-only" type="file" accept="application/json,.json">
     <input id="profile-photo-file" class="sr-only" type="file" accept="image/*">
     <input id="institution-logo-file" class="sr-only" type="file" accept="image/*">
-    <script defer src="{% static 'core/lib.js' %}?v=7"></script>
-    <script defer src="{% static 'core/app.js' %}?v=7"></script>
+    <script defer src="{% static 'core/lib.js' %}?v=9"></script>
+    <script defer src="{% static 'core/app.js' %}?v=9"></script>
   </body>
 </html>
